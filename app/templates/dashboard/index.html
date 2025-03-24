@@ -1,0 +1,263 @@
+{% extends 'base.html' %}
+
+{% block title %}HakPak Dashboard{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-6">
+        <div class="card bg-dark border-secondary mb-3">
+            <div class="card-header bg-secondary text-light">
+                <h5 class="mb-0"><i class="bi bi-cpu"></i> System Status</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="mb-3">
+                            <label class="form-label">CPU Usage</label>
+                            <div class="progress">
+                                <div id="cpu-progress" class="progress-bar bg-danger" role="progressbar" style="width: 0%"></div>
+                            </div>
+                            <small id="cpu-text" class="form-text text-muted">0%</small>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Memory Usage</label>
+                            <div class="progress">
+                                <div id="memory-progress" class="progress-bar bg-warning" role="progressbar" style="width: 0%"></div>
+                            </div>
+                            <small id="memory-text" class="form-text text-muted">0%</small>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Disk Usage</label>
+                            <div class="progress">
+                                <div id="disk-progress" class="progress-bar bg-info" role="progressbar" style="width: 0%"></div>
+                            </div>
+                            <small id="disk-text" class="form-text text-muted">0%</small>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="mb-3">
+                            <label class="form-label">CPU Temperature</label>
+                            <div class="progress">
+                                <div id="temp-progress" class="progress-bar bg-danger" role="progressbar" style="width: 0%"></div>
+                            </div>
+                            <small id="temp-text" class="form-text text-muted">0°C</small>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Uptime</label>
+                            <p id="uptime-text" class="mb-0">0d 0h 0m 0s</p>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Battery Status</label>
+                            <div class="progress">
+                                <div id="battery-progress" class="progress-bar bg-success" role="progressbar" style="width: 0%"></div>
+                            </div>
+                            <small id="battery-text" class="form-text text-muted">0% (Charging)</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card bg-dark border-secondary mb-3">
+            <div class="card-header bg-secondary text-light">
+                <h5 class="mb-0"><i class="bi bi-wifi"></i> Network Status</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <h6>WiFi Status</h6>
+                        <p id="wifi-status"><span class="badge bg-success">Active</span> hakpak</p>
+                        <p>IP: <span id="wifi-ip">192.168.4.1</span></p>
+                        <p>Clients: <span id="wifi-clients">0</span></p>
+                    </div>
+                    <div class="col-md-6">
+                        <h6>Internet Status</h6>
+                        <p id="internet-status"><span class="badge bg-danger">Disconnected</span></p>
+                    </div>
+                </div>
+                <hr>
+                <div class="row">
+                    <div class="col-md-6">
+                        <h6>Bluetooth Status</h6>
+                        <p id="bluetooth-status"><span class="badge bg-success">Active</span></p>
+                        <p>Visible as: <span id="bluetooth-name">HakPak</span></p>
+                    </div>
+                    <div class="col-md-6">
+                        <h6>USB Gadget Mode</h6>
+                        <p id="usb-status"><span class="badge bg-secondary">Disabled</span></p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-md-6">
+        <div class="card bg-dark border-secondary mb-3">
+            <div class="card-header bg-secondary text-light">
+                <h5 class="mb-0"><i class="bi bi-tools"></i> Quick Actions</h5>
+            </div>
+            <div class="card-body">
+                <div class="d-grid gap-2">
+                    <button class="btn btn-danger" type="button">
+                        <i class="bi bi-wifi"></i> Start WiFi Scan
+                    </button>
+                    <button class="btn btn-warning" type="button">
+                        <i class="bi bi-bluetooth"></i> Start Bluetooth Scan
+                    </button>
+                    <button class="btn btn-info" type="button">
+                        <i class="bi bi-broadcast-pin"></i> RF Scanner
+                    </button>
+                    <button class="btn btn-success" type="button">
+                        <i class="bi bi-terminal"></i> Open Terminal
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card bg-dark border-secondary mb-3">
+            <div class="card-header bg-secondary text-light">
+                <h5 class="mb-0"><i class="bi bi-device-hdd"></i> Flipper Zero Status</h5>
+            </div>
+            <div class="card-body">
+                <div id="flipper-disconnected">
+                    <div class="alert alert-warning">
+                        <i class="bi bi-exclamation-triangle"></i> Flipper Zero not detected
+                    </div>
+                    <div class="d-grid gap-2">
+                        <button class="btn btn-outline-light" type="button">
+                            <i class="bi bi-search"></i> Scan for Flipper Zero
+                        </button>
+                    </div>
+                </div>
+                <div id="flipper-connected" style="display: none;">
+                    <div class="alert alert-success">
+                        <i class="bi bi-check-circle"></i> Flipper Zero connected
+                    </div>
+                    <p>Firmware: <span id="flipper-firmware">Unleashed v.1.5.0</span></p>
+                    <p>Battery: <span id="flipper-battery">85%</span></p>
+                    <p>Storage: <span id="flipper-storage">82% free</span></p>
+                    <div class="d-grid gap-2">
+                        <a href="{{ url_for('flipper.index') }}" class="btn btn-primary">
+                            <i class="bi bi-controller"></i> Open Flipper Control
+                        </a>
+                        <button class="btn btn-warning detach-button" type="button">
+                            <i class="bi bi-box-arrow-right"></i> Prepare for Detachment
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // Connect to WebSocket server
+    const socket = io();
+    
+    // Update system status every 5 seconds
+    function updateSystemStatus() {
+        fetch('/system-status')
+            .then(response => response.json())
+            .then(data => {
+                // Update CPU
+                document.getElementById('cpu-progress').style.width = data.cpu_usage + '%';
+                document.getElementById('cpu-text').textContent = data.cpu_usage + '%';
+                document.getElementById('cpu-usage').textContent = data.cpu_usage + '%';
+                
+                // Update Memory
+                document.getElementById('memory-progress').style.width = data.memory_usage + '%';
+                document.getElementById('memory-text').textContent = data.memory_usage + '%';
+                
+                // Update Disk
+                document.getElementById('disk-progress').style.width = data.disk_usage + '%';
+                document.getElementById('disk-text').textContent = data.disk_usage + '%';
+                
+                // Update Temperature
+                document.getElementById('temp-progress').style.width = Math.min(data.temperature / 80 * 100, 100) + '%';
+                document.getElementById('temp-text').textContent = data.temperature + '°C';
+                
+                // Update Uptime
+                const uptime = data.uptime;
+                const days = Math.floor(uptime / 86400);
+                const hours = Math.floor((uptime % 86400) / 3600);
+                const minutes = Math.floor((uptime % 3600) / 60);
+                const seconds = Math.floor(uptime % 60);
+                document.getElementById('uptime-text').textContent = 
+                    days + 'd ' + hours + 'h ' + minutes + 'm ' + seconds + 's';
+                
+                // Update Battery
+                const battery = data.battery;
+                document.getElementById('battery-progress').style.width = battery.percentage + '%';
+                document.getElementById('battery-text').textContent = 
+                    battery.percentage + '% (' + (battery.charging ? 'Charging' : 'Discharging') + ')';
+                document.getElementById('battery-level').textContent = battery.percentage + '%';
+            })
+            .catch(error => console.error('Error fetching system status:', error));
+    }
+    
+    // Check Flipper Zero status
+    function checkFlipperStatus() {
+        fetch('/flipper/status')
+            .then(response => response.json())
+            .then(data => {
+                if (data.connected) {
+                    document.getElementById('flipper-disconnected').style.display = 'none';
+                    document.getElementById('flipper-connected').style.display = 'block';
+                    document.getElementById('flipper-firmware').textContent = data.firmware;
+                } else {
+                    document.getElementById('flipper-disconnected').style.display = 'block';
+                    document.getElementById('flipper-connected').style.display = 'none';
+                }
+            })
+            .catch(error => console.error('Error fetching Flipper status:', error));
+    }
+    
+    // Initialize
+    document.addEventListener('DOMContentLoaded', function() {
+        updateSystemStatus();
+        checkFlipperStatus();
+        
+        // Update status periodically
+        setInterval(updateSystemStatus, 5000);
+        setInterval(checkFlipperStatus, 10000);
+        
+        // Handle Flipper detachment button
+        document.querySelector('.detach-button')?.addEventListener('click', function() {
+            fetch('/flipper/detach', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert(data.message);
+                } else {
+                    alert('Error: ' + data.message);
+                }
+            })
+            .catch(error => console.error('Error detaching Flipper:', error));
+        });
+    });
+    
+    // Handle WebSocket events
+    socket.on('connect', function() {
+        console.log('Connected to WebSocket server');
+    });
+    
+    socket.on('flipper_status', function(data) {
+        console.log('Flipper status update:', data);
+        if (data.status === 'detached') {
+            document.getElementById('flipper-disconnected').style.display = 'block';
+            document.getElementById('flipper-connected').style.display = 'none';
+        }
+    });
+</script>
+{% endblock %} 

@@ -1,0 +1,94 @@
+/* HakPak Main Stylesheet */
+
+body {
+    background-color: #121212;
+    color: #f8f9fa;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Header & Navigation */
+.navbar {
+    border-bottom: 1px solid #333;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+}
+
+.navbar-brand i {
+    margin-right: 5px;
+}
+
+/* Cards */
+.card {
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+    margin-bottom: 20px;
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.card-header {
+    padding: 0.75rem 1.25rem;
+    font-weight: bold;
+}
+
+/* Progress Bars */
+.progress {
+    height: 12px;
+    background-color: #333;
+    margin-bottom: 5px;
+}
+
+.progress-bar {
+    transition: width 0.5s ease;
+}
+
+/* Badges */
+.badge {
+    font-weight: normal;
+    padding: 5px 8px;
+}
+
+/* Buttons */
+.btn {
+    border-radius: 4px;
+    font-weight: 500;
+}
+
+.btn i {
+    margin-right: 5px;
+}
+
+/* Terminal styles for console output */
+.terminal-output {
+    background-color: #000;
+    color: #00ff00;
+    font-family: 'Courier New', Courier, monospace;
+    padding: 10px;
+    border-radius: 5px;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+/* Flipper Zero styling */
+.flipper-control {
+    background: linear-gradient(to bottom, #212529, #343a40);
+    border-radius: 10px;
+    padding: 20px;
+    box-shadow: 0 0 15px rgba(0, 0, 0, 0.5);
+}
+
+.flipper-button {
+    width: 60px;
+    height: 60px;
+    font-size: 1.5rem;
+    margin: 5px;
+}
+
+/* Footer */
+footer {
+    margin-top: auto;
+    border-top: 1px solid #333;
+} 

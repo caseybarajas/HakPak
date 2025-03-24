@@ -1,0 +1,283 @@
+{% extends 'base.html' %}
+
+{% block title %}Flipper Zero Control{% endblock %}
+
+{% block extra_css %}
+<style>
+    .card-flipper {
+        border-color: #2c85ff;
+    }
+    .card-header-flipper {
+        background-color: #2c85ff;
+    }
+    .btn-flipper {
+        background-color: #2c85ff;
+        border-color: #2c85ff;
+    }
+    .btn-flipper:hover {
+        background-color: #1a76f0;
+        border-color: #1a76f0;
+    }
+    .signal-item {
+        cursor: pointer;
+    }
+    .signal-item:hover {
+        background-color: rgba(44, 133, 255, 0.1);
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="row mb-3">
+    <div class="col-md-12">
+        <div class="card bg-dark card-flipper">
+            <div class="card-header card-header-flipper text-light d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-usb-symbol"></i> Flipper Zero Control</h5>
+                <div>
+                    <button id="btn-connect" class="btn btn-sm btn-success">
+                        <i class="bi bi-plug-fill"></i> Connect
+                    </button>
+                    <button id="btn-disconnect" class="btn btn-sm btn-danger" disabled>
+                        <i class="bi bi-plug"></i> Disconnect
+                    </button>
+                </div>
+            </div>
+            <div class="card-body">
+                <div id="connection-status" class="alert alert-warning mb-3">
+                    <i class="bi bi-exclamation-triangle-fill"></i> Flipper Zero not connected
+                </div>
+                
+                <div id="device-info" class="mb-3 d-none">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="card bg-dark border-secondary mb-3">
+                                <div class="card-header bg-secondary text-light">
+                                    <h6 class="mb-0">Device Information</h6>
+                                </div>
+                                <div class="card-body">
+                                    <ul class="list-group list-group-flush bg-dark">
+                                        <li class="list-group-item bg-dark text-light border-secondary">
+                                            <strong>Firmware:</strong> <span id="firmware-version">Unknown</span>
+                                        </li>
+                                        <li class="list-group-item bg-dark text-light border-secondary">
+                                            <strong>Battery:</strong> <span id="battery-level">Unknown</span>
+                                        </li>
+                                        <li class="list-group-item bg-dark text-light border-secondary">
+                                            <strong>Serial Port:</strong> <span id="serial-port">Unknown</span>
+                                        </li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <ul class="nav nav-tabs mb-3" id="flipper-tabs" role="tablist">
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link active" id="ir-tab" data-bs-toggle="tab" data-bs-target="#ir-content" 
+                                type="button" role="tab" aria-controls="ir-content" aria-selected="true">
+                            <i class="bi bi-broadcast"></i> Infrared
+                        </button>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link" id="subghz-tab" data-bs-toggle="tab" data-bs-target="#subghz-content" 
+                                type="button" role="tab" aria-controls="subghz-content" aria-selected="false">
+                            <i class="bi bi-wifi"></i> SubGHz
+                        </button>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link" id="commands-tab" data-bs-toggle="tab" data-bs-target="#commands-content" 
+                                type="button" role="tab" aria-controls="commands-content" aria-selected="false">
+                            <i class="bi bi-terminal"></i> Commands
+                        </button>
+                    </li>
+                </ul>
+                
+                <div class="tab-content" id="flipper-tabs-content">
+                    <!-- IR Tab Content -->
+                    <div class="tab-pane fade show active" id="ir-content" role="tabpanel" aria-labelledby="ir-tab">
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="card bg-dark border-secondary mb-3">
+                                    <div class="card-header bg-secondary text-light d-flex justify-content-between align-items-center">
+                                        <h6 class="mb-0">IR Signals</h6>
+                                        <button id="btn-refresh-signals" class="btn btn-sm btn-dark">
+                                            <i class="bi bi-arrow-clockwise"></i> Refresh
+                                        </button>
+                                    </div>
+                                    <div class="card-body">
+                                        <div id="ir-signals-loading" class="text-center py-3">
+                                            <div class="spinner-border text-light" role="status">
+                                                <span class="visually-hidden">Loading...</span>
+                                            </div>
+                                            <p class="mt-2">Loading signals...</p>
+                                        </div>
+                                        <div id="ir-signals-empty" class="text-center py-3 d-none">
+                                            <i class="bi bi-inbox fs-1"></i>
+                                            <p class="mt-2">No IR signals found</p>
+                                        </div>
+                                        <ul id="ir-signals-list" class="list-group list-group-flush bg-dark d-none">
+                                            <!-- IR signals will be populated here -->
+                                        </ul>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="card bg-dark border-secondary mb-3">
+                                    <div class="card-header bg-secondary text-light">
+                                        <h6 class="mb-0">Record New Signal</h6>
+                                    </div>
+                                    <div class="card-body">
+                                        <form id="record-ir-form">
+                                            <div class="mb-3">
+                                                <label for="ir-signal-name" class="form-label">Signal Name</label>
+                                                <input type="text" class="form-control bg-dark text-light border-secondary" 
+                                                       id="ir-signal-name" placeholder="Enter signal name">
+                                            </div>
+                                            <div class="d-grid">
+                                                <button type="submit" class="btn btn-flipper" id="btn-record-ir">
+                                                    <i class="bi bi-record-circle"></i> Start Recording
+                                                </button>
+                                            </div>
+                                        </form>
+                                        <div id="recording-status" class="alert alert-info mt-3 d-none">
+                                            <div class="d-flex align-items-center">
+                                                <div class="spinner-border spinner-border-sm me-2" role="status">
+                                                    <span class="visually-hidden">Recording...</span>
+                                                </div>
+                                                <div>Recording in progress, point remote at Flipper Zero and press the button...</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- SubGHz Tab Content -->
+                    <div class="tab-pane fade" id="subghz-content" role="tabpanel" aria-labelledby="subghz-tab">
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="card bg-dark border-secondary mb-3">
+                                    <div class="card-header bg-secondary text-light d-flex justify-content-between align-items-center">
+                                        <h6 class="mb-0">SubGHz Signals</h6>
+                                        <button id="btn-refresh-subghz" class="btn btn-sm btn-dark">
+                                            <i class="bi bi-arrow-clockwise"></i> Refresh
+                                        </button>
+                                    </div>
+                                    <div class="card-body">
+                                        <div id="subghz-signals-loading" class="text-center py-3">
+                                            <div class="spinner-border text-light" role="status">
+                                                <span class="visually-hidden">Loading...</span>
+                                            </div>
+                                            <p class="mt-2">Loading signals...</p>
+                                        </div>
+                                        <div id="subghz-signals-empty" class="text-center py-3 d-none">
+                                            <i class="bi bi-inbox fs-1"></i>
+                                            <p class="mt-2">No SubGHz signals found</p>
+                                        </div>
+                                        <ul id="subghz-signals-list" class="list-group list-group-flush bg-dark d-none">
+                                            <!-- SubGHz signals will be populated here -->
+                                        </ul>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="card bg-dark border-secondary mb-3">
+                                    <div class="card-header bg-secondary text-light">
+                                        <h6 class="mb-0">Receive Signal</h6>
+                                    </div>
+                                    <div class="card-body">
+                                        <form id="receive-subghz-form">
+                                            <div class="mb-3">
+                                                <label for="subghz-frequency" class="form-label">Frequency</label>
+                                                <select class="form-select bg-dark text-light border-secondary" id="subghz-frequency">
+                                                    <!-- Frequencies will be populated here -->
+                                                </select>
+                                            </div>
+                                            <div class="mb-3">
+                                                <label for="subghz-file-name" class="form-label">File Name (Optional)</label>
+                                                <input type="text" class="form-control bg-dark text-light border-secondary" 
+                                                       id="subghz-file-name" placeholder="Enter file name">
+                                            </div>
+                                            <div class="mb-3">
+                                                <label for="subghz-timeout" class="form-label">Timeout (seconds)</label>
+                                                <input type="number" class="form-control bg-dark text-light border-secondary" 
+                                                       id="subghz-timeout" value="30" min="1" max="300">
+                                            </div>
+                                            <div class="d-grid">
+                                                <button type="submit" class="btn btn-flipper" id="btn-receive-subghz">
+                                                    <i class="bi bi-record-circle"></i> Start Receiving
+                                                </button>
+                                            </div>
+                                        </form>
+                                        <div id="receiving-status" class="alert alert-info mt-3 d-none">
+                                            <div class="d-flex align-items-center">
+                                                <div class="spinner-border spinner-border-sm me-2" role="status">
+                                                    <span class="visually-hidden">Receiving...</span>
+                                                </div>
+                                                <div>Receiving SubGHz signals on <span id="receiving-frequency"></span>...</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Commands Tab Content -->
+                    <div class="tab-pane fade" id="commands-content" role="tabpanel" aria-labelledby="commands-tab">
+                        <div class="row">
+                            <div class="col-md-12">
+                                <div class="card bg-dark border-secondary mb-3">
+                                    <div class="card-header bg-secondary text-light">
+                                        <h6 class="mb-0">Send Command</h6>
+                                    </div>
+                                    <div class="card-body">
+                                        <form id="command-form">
+                                            <div class="mb-3">
+                                                <label for="command-input" class="form-label">Command</label>
+                                                <input type="text" class="form-control bg-dark text-light border-secondary" 
+                                                       id="command-input" placeholder="Enter command">
+                                            </div>
+                                            <div class="d-grid">
+                                                <button type="submit" class="btn btn-flipper" id="btn-send-command">
+                                                    <i class="bi bi-send"></i> Send Command
+                                                </button>
+                                            </div>
+                                        </form>
+                                        <div class="mt-3">
+                                            <label class="form-label">Response</label>
+                                            <pre id="command-response" class="bg-dark text-light p-3 border border-secondary rounded" style="min-height: 150px;">No response yet</pre>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div class="card bg-dark border-secondary mb-3">
+                                    <div class="card-header bg-secondary text-light">
+                                        <h6 class="mb-0">Quick Commands</h6>
+                                    </div>
+                                    <div class="card-body">
+                                        <div class="d-grid gap-2">
+                                            <button class="btn btn-flipper quick-command" data-command="device_info">
+                                                <i class="bi bi-info-circle"></i> Device Info
+                                            </button>
+                                            <button class="btn btn-flipper quick-command" data-command="restart">
+                                                <i class="bi bi-arrow-clockwise"></i> Restart Flipper
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{{ url_for('static', filename='js/flipper.js') }}"></script>
+{% endblock %} 

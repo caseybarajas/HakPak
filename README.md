@@ -9,7 +9,7 @@
 
 hakpak is an all-in-one portable penetration testing platform that combines the software capabilities of a Raspberry Pi 4 running Kali Linux with the hardware interaction features of a Flipper Zero, all in a compact, battery-powered package controllable via a web interface.
 
-(put image here when done)
+![HakPak Device](https://placeholder-for-hakpak-image.com/hakpak.jpg)
 
 Designed for security professionals and ethical hackers, hakpak provides a comprehensive toolkit for both wireless and physical penetration testing in a discreet, backpack-friendly form factor.
 
@@ -21,6 +21,8 @@ Designed for security professionals and ethical hackers, hakpak provides a compr
 - **Wireless Capabilities**: Built-in WiFi, Bluetooth, and RF scanning/transmission
 - **Compact Design**: Easily fits in a backpack or laptop bag
 - **Modular Architecture**: Expandable with additional sensors and hardware
+- **Real-time System Monitoring**: View battery, CPU, memory, and temperature stats
+- **Integrated Tool Management**: Launch and control common Kali tools directly from the web interface
 
 ## 🧰 Components
 
@@ -33,13 +35,15 @@ Designed for security professionals and ethical hackers, hakpak provides a compr
 - microSD Card (64GB+ recommended)
 - Small USB hub (optional)
 - Heat sinks/cooling solution for Pi
+- **Jumper wires** for GPIO connection (optional, if using UART instead of USB)
 
 ### Software Stack
 
 - Kali Linux ARM for Raspberry Pi
-- Custom Web Interface (Flask/Python backend)
+- Flask/Python Web Application Backend
+- Socket.IO for real-time communication
+- Bootstrap 5 for responsive frontend
 - Flipper Zero integration scripts
-- Websocket implementation for real-time control
 - Power management utilities
 
 ## 📋 Installation
@@ -56,46 +60,59 @@ sudo dd if=kali-linux-2023.1-raspberry-pi-arm64.img.xz of=/dev/sdX bs=4M status=
 # Boot the Pi and update
 sudo apt update && sudo apt upgrade -y
 
-# Install required packages
-sudo apt install -y git python3-pip flask nginx
-
 # Clone this repository
 git clone https://github.com/caseybarajas/hakpak.git
 cd hakpak
 
-# Install Python dependencies
-pip3 install -r requirements.txt
+# Run the installation script
+sudo ./scripts/install.sh
 ```
 
-### Setting up the Web Interface
-
-```bash
-# Configure web service to start on boot
-sudo cp config/hakpak.service /etc/systemd/system/
-sudo systemctl enable hakpak.service
-sudo systemctl start hakpak.service
-
-# Configure Nginx as reverse proxy
-sudo cp config/nginx-hakpak /etc/nginx/sites-available/
-sudo ln -s /etc/nginx/sites-available/nginx-hakpak /etc/nginx/sites-enabled/
-sudo systemctl restart nginx
-```
+The installation script will:
+1. Install required packages
+2. Configure the WiFi access point
+3. Set up the web interface
+4. Configure the Flipper Zero connection
+5. Enable services to start on boot
 
 ### Connecting the Flipper Zero
 
-1. Connect Flipper Zero to the Raspberry Pi via USB (or serial preferred)
-2. Install qFlipper CLI on the Pi:
-   ```bash
-   cd /opt
-   git clone https://github.com/flipperdevices/qFlipper.git
-   cd qFlipper
-   ./build_cli.sh
-   ```
-3. Run the setup script to configure the Flipper:
-   ```bash
-   cd ~/hakpak
-   sudo ./setup_flipper.sh
-   ```
+#### Wiring Diagram - Raspberry Pi to Flipper Zero
+
+| Raspberry Pi (GPIO) | Flipper Zero    | Function |
+|---------------------|-----------------|----------|
+| Pin 6 (GND)         | GND Pin (18)    | Ground   |
+| Pin 8 (GPIO14/TXD)  | RX Pin (14/PB7) | Data TX  |
+| Pin 10 (GPIO15/RXD) | TX Pin (13/PB6) | Data RX  |
+| Pin 4 (5V)          | 5V Pin (Optional)| Power    |
+
+For a visual connection diagram, see the [detailed pinout documentation](docs/pinout.md).
+
+ASCII Connection Diagram:
+```
+Raspberry Pi   Flipper Zero    
+--------------+--------------
+GPIO 8 (TXD) -|-> Pin 14 (RX)
+GPIO 10 (RXD) <-|- Pin 13 (TX)
+Pin 6 (GND) ----|-- Pin 18 (GND)
+Pin 4 (5V) -----|-- 5V (Optional)
+```
+
+**Notes:**
+- The Flipper Zero can also be connected via USB, which is the default connection method.
+- For UART connection, make sure to enable UART in the Raspberry Pi configuration.
+
+To enable UART:
+```bash
+sudo raspi-config
+# Navigate to Interface Options > Serial Port
+# Disable serial login shell, but enable serial hardware
+```
+
+After wiring, run the Flipper Zero setup script:
+```bash
+sudo ./scripts/setup_flipper.sh
+```
 
 ## 🚀 Usage
 
@@ -113,9 +130,12 @@ The web interface provides access to all functionality:
 
 - **Dashboard**: System status, battery levels, active connections
 - **Kali Tools**: Access to common Kali Linux pentesting tools
+  - Network tools (nmap, wireshark, netdiscover)
+  - Web tools (burpsuite, sqlmap, dirb)
+  - Wireless tools (aircrack-ng, wifite, kismet)
+  - Exploitation tools (metasploit, hydra, john)
 - **Flipper Control**: Interface with Flipper Zero functions
 - **Scan Tools**: WiFi, Bluetooth, and RF scanning utilities
-- **Logs**: System and operation logs
 - **Settings**: Configure network, services, and system settings
 
 ### Detaching the Flipper Zero
@@ -140,9 +160,17 @@ The system can be expanded with additional hardware:
 
 ### Software Customization
 
-- Custom tool modules can be added to `/opt/hakpak/modules/`
-- New Flipper Zero integrations can be developed using the API
-- The web interface is built on Bootstrap and can be themed
+The HakPak web application is built on a modular Flask architecture:
+
+- Controllers are located in `app/controllers/`
+- Templates are in `app/templates/`
+- Static files (CSS, JS) are in `app/static/`
+- Configuration files are in `config/`
+
+To add a new feature:
+1. Create a new controller in `app/controllers/`
+2. Add your template in `app/templates/`
+3. Register your blueprint in `app/__init__.py`
 
 ## 🔧 Troubleshooting
 
@@ -150,7 +178,45 @@ Common issues and solutions:
 
 - **System doesn't boot**: Check battery level and connections
 - **Web interface not accessible**: Verify WiFi connection and IP address
+  - Run `ifconfig` to check your network configuration
+  - Try accessing via IP address (192.168.4.1) if hostname doesn't work
 - **Flipper Zero not detected**: Check USB connection and run `sudo ./scripts/detect_flipper.sh`
+  - If using UART, verify the wiring connections
+  - Check `dmesg` output for connection issues
+- **WiFi access point not working**: Run `sudo systemctl status hostapd` and `sudo systemctl status dnsmasq`
+
+## 📁 Project Structure
+
+```
+hakpak/
+├── app/                    # Main application directory
+│   ├── controllers/        # Flask route controllers
+│   ├── models/             # Data models
+│   ├── static/             # Static assets
+│   │   ├── css/            # Stylesheets
+│   │   ├── js/             # JavaScript files
+│   │   └── img/            # Images
+│   ├── templates/          # Jinja2 templates
+│   │   ├── dashboard/      # Dashboard views
+│   │   ├── flipper/        # Flipper Zero views
+│   │   ├── kali_tools/     # Kali tools views
+│   │   ├── scan_tools/     # Scanning tools views
+│   │   └── settings/       # Settings views
+│   └── __init__.py         # Application factory
+├── config/                 # Configuration files
+│   ├── hakpak.service      # Systemd service file
+│   └── nginx-hakpak        # Nginx configuration
+├── docs/                   # Documentation
+│   └── pinout.md           # Pinout documentation
+├── flipper_integration/    # Flipper Zero integration code
+├── scripts/                # Setup and utility scripts
+│   ├── install.sh          # Main installation script
+│   └── setup_flipper.sh    # Flipper Zero setup script
+├── requirements.txt        # Python dependencies
+├── wsgi.py                 # WSGI entry point
+├── LICENSE                 # MIT License
+└── README.md               # This file
+```
 
 ## 🔮 Future Development
 
