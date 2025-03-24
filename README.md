@@ -1,4 +1,4 @@
-# 🔐 HackPack: Portable Pentesting Platform
+# 🔐 HakPak: Portable Pentesting Platform
 
 [![Kali Linux](https://img.shields.io/badge/Kali-268BEE?style=for-the-badge&logo=kalilinux&logoColor=white)](https://www.kali.org/)
 [![Raspberry Pi](https://img.shields.io/badge/Raspberry%20Pi-C51A4A?style=for-the-badge&logo=Raspberry-Pi)](https://www.raspberrypi.org/)
@@ -7,11 +7,11 @@
 
 ## 🌟 Overview
 
-HackPack is an all-in-one portable penetration testing platform that combines the software capabilities of a Raspberry Pi 4 running Kali Linux with the hardware interaction features of a Flipper Zero, all in a compact, battery-powered package controllable via a web interface.
+hakpak is an all-in-one portable penetration testing platform that combines the software capabilities of a Raspberry Pi 4 running Kali Linux with the hardware interaction features of a Flipper Zero, all in a compact, battery-powered package controllable via a web interface.
 
 (put image here when done)
 
-Designed for security professionals and ethical hackers, HackPack provides a comprehensive toolkit for both wireless and physical penetration testing in a discreet, backpack-friendly form factor.
+Designed for security professionals and ethical hackers, hakpak provides a comprehensive toolkit for both wireless and physical penetration testing in a discreet, backpack-friendly form factor.
 
 ## ✨ Features
 
@@ -60,8 +60,8 @@ sudo apt update && sudo apt upgrade -y
 sudo apt install -y git python3-pip flask nginx
 
 # Clone this repository
-git clone https://github.com/caseybarajas/hackpack.git
-cd hackpack
+git clone https://github.com/caseybarajas/hakpak.git
+cd hakpak
 
 # Install Python dependencies
 pip3 install -r requirements.txt
@@ -71,13 +71,13 @@ pip3 install -r requirements.txt
 
 ```bash
 # Configure web service to start on boot
-sudo cp config/hackpack.service /etc/systemd/system/
-sudo systemctl enable hackpack.service
-sudo systemctl start hackpack.service
+sudo cp config/hakpak.service /etc/systemd/system/
+sudo systemctl enable hakpak.service
+sudo systemctl start hakpak.service
 
 # Configure Nginx as reverse proxy
-sudo cp config/nginx-hackpack /etc/nginx/sites-available/
-sudo ln -s /etc/nginx/sites-available/nginx-hackpack /etc/nginx/sites-enabled/
+sudo cp config/nginx-hakpak /etc/nginx/sites-available/
+sudo ln -s /etc/nginx/sites-available/nginx-hakpak /etc/nginx/sites-enabled/
 sudo systemctl restart nginx
 ```
 
@@ -93,7 +93,7 @@ sudo systemctl restart nginx
    ```
 3. Run the setup script to configure the Flipper:
    ```bash
-   cd ~/hackpack
+   cd ~/hakpak
    sudo ./setup_flipper.sh
    ```
 
@@ -103,9 +103,9 @@ sudo systemctl restart nginx
 
 1. Power on the system by connecting the battery pack
 2. Wait approximately 60 seconds for boot sequence
-3. Connect to the HackPack WiFi network (default SSID: `HackPack`)
+3. Connect to the hakpak WiFi network (default SSID: `hakpak`)
    - Default password: `pentestallthethings`
-4. Access the web interface at `http://hackpack.local` or `http://192.168.4.1`
+4. Access the web interface at `http://hakpak.local` or `http://192.168.4.1`
 
 ### Web Interface
 
@@ -140,7 +140,7 @@ The system can be expanded with additional hardware:
 
 ### Software Customization
 
-- Custom tool modules can be added to `/opt/hackpack/modules/`
+- Custom tool modules can be added to `/opt/hakpak/modules/`
 - New Flipper Zero integrations can be developed using the API
 - The web interface is built on Bootstrap and can be themed
 
@@ -167,10 +167,10 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## ⚠️ Legal Disclaimer
 
-HackPack is designed for legitimate security testing and educational purposes only. Users are responsible for complying with all applicable laws. Unauthorized access to computer systems and networks is illegal and unethical. Always obtain proper authorization before conducting security tests.
+hakpak is designed for legitimate security testing and educational purposes only. Users are responsible for complying with all applicable laws. Unauthorized access to computer systems and networks is illegal and unethical. Always obtain proper authorization before conducting security tests.
 
 ---
 
 **Made with ❤️ by Casey Barajas, for security enthusiasts**
 
-[GitHub](https://github.com/caseybarajas/hackpack)
+[GitHub](https://github.com/caseybarajas/hakpak)
