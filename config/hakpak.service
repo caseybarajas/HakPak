@@ -1,15 +1,16 @@
 [Unit]
-Description=HakPak Portable Pentesting Platform
+Description=HakPak - Portable Pentesting Platform
 After=network.target
 
 [Service]
-User=kali
+Type=simple
+User=root
+Group=root
 WorkingDirectory=/opt/hakpak
-ExecStart=/usr/bin/python3 wsgi.py
+Environment=PATH=/opt/hakpak/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/opt/hakpak/venv/bin/gunicorn --workers 4 --bind unix:/tmp/hakpak.sock wsgi:app
 Restart=always
-Environment="PYTHONPATH=/opt/hakpak"
-Environment="FLASK_APP=app"
-Environment="FLASK_ENV=production"
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target 

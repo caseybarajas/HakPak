@@ -1,0 +1,21 @@
+# The loopback network interface
+auto lo
+iface lo inet loopback
+
+# The primary network interface
+allow-hotplug eth0
+iface eth0 inet dhcp
+
+# HakPak WiFi Access Point
+allow-hotplug wlan0
+iface wlan0 inet static
+    address 192.168.4.1
+    netmask 255.255.255.0
+    network 192.168.4.0
+    broadcast 192.168.4.255
+    post-up iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+    post-up iptables -A FORWARD -i eth0 -o wlan0 -m state --state RELATED,ESTABLISHED -j ACCEPT
+    post-up iptables -A FORWARD -i wlan0 -o eth0 -j ACCEPT
+    post-down iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
+    post-down iptables -D FORWARD -i eth0 -o wlan0 -m state --state RELATED,ESTABLISHED -j ACCEPT
+    post-down iptables -D FORWARD -i wlan0 -o eth0 -j ACCEPT 

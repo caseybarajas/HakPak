@@ -1,241 +1,112 @@
 #!/bin/bash
 
-# HakPak Installation Script
-# This script sets up the HakPak Portable Pentesting Platform
+# Exit on error
+set -e
 
-# Colors for terminal output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+echo "🔐 Installing HakPak - Portable Pentesting Platform..."
 
-# Installation directory
-INSTALL_DIR="/opt/hakpak"
-
-echo -e "${GREEN}===== HakPak Installation =====${NC}"
-echo -e "This script will install the HakPak Portable Pentesting Platform"
-echo ""
-
-# Check for root privileges
-if [ "$EUID" -ne 0 ]; then
-    echo -e "${RED}This script must be run as root${NC}"
+# Check if running as root
+if [ "$EUID" -ne 0 ]; then 
+    echo "Please run as root"
     exit 1
 fi
 
-# Function to install required packages
-install_dependencies() {
-    echo -e "${YELLOW}Installing required packages...${NC}"
-    
-    apt-get update
-    apt-get install -y \
-        python3 \
-        python3-pip \
-        git \
-        nginx \
-        hostapd \
-        dnsmasq \
-        bluez \
-        kali-tools-wireless \
-        kali-tools-bluetooth \
-        kali-tools-web \
-        kali-tools-sniffing-spoofing \
-        python3-dev \
-        python3-setuptools \
-        libffi-dev \
-        libssl-dev
-    
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}Failed to install packages${NC}"
-        return 1
-    fi
-    
-    echo -e "${GREEN}Packages installed successfully${NC}"
-    return 0
-}
+# Create necessary directories
+echo "Creating directories..."
+mkdir -p /etc/hakpak
+mkdir -p /var/log/hakpak
+mkdir -p /opt/hakpak
 
-# Function to install Python requirements
-install_python_requirements() {
-    echo -e "${YELLOW}Installing Python requirements...${NC}"
-    
-    pip3 install -r "${INSTALL_DIR}/requirements.txt"
-    
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}Failed to install Python requirements${NC}"
-        return 1
-    fi
-    
-    echo -e "${GREEN}Python requirements installed successfully${NC}"
-    return 0
-}
+# Install system dependencies
+echo "Installing system dependencies..."
+apt-get update
+apt-get install -y \
+    python3 \
+    python3-pip \
+    python3-venv \
+    nginx \
+    hostapd \
+    dnsmasq \
+    usbutils \
+    git
 
-# Function to install HakPak
-install_hakpak() {
-    echo -e "${YELLOW}Installing HakPak to ${INSTALL_DIR}...${NC}"
-    
-    # Create installation directory if it doesn't exist
-    mkdir -p "${INSTALL_DIR}"
-    
-    # Check if this script is running from the HakPak directory
-    if [ -f "wsgi.py" ] && [ -d "app" ]; then
-        echo -e "${YELLOW}Installing from current directory...${NC}"
-        
-        # Copy files to installation directory
-        cp -r app config scripts flipper_integration requirements.txt wsgi.py "${INSTALL_DIR}/"
-        
-        if [ $? -ne 0 ]; then
-            echo -e "${RED}Failed to copy files${NC}"
-            return 1
-        fi
-    else
-        echo -e "${YELLOW}Cloning from GitHub...${NC}"
-        
-        # Clone repository
-        git clone https://github.com/caseybarajas/hakpak.git "${INSTALL_DIR}"
-        
-        if [ $? -ne 0 ]; then
-            echo -e "${RED}Failed to clone repository${NC}"
-            return 1
-        fi
-    fi
-    
-    # Set permissions
-    chown -R kali:kali "${INSTALL_DIR}"
-    chmod -R 755 "${INSTALL_DIR}"
-    chmod +x "${INSTALL_DIR}/scripts"/*.sh
-    
-    echo -e "${GREEN}HakPak installed to ${INSTALL_DIR}${NC}"
-    return 0
-}
+# Create Python virtual environment
+echo "Setting up Python environment..."
+python3 -m venv /opt/hakpak/venv
+source /opt/hakpak/venv/bin/activate
 
-# Function to configure services
-configure_services() {
-    echo -e "${YELLOW}Configuring services...${NC}"
-    
-    # Install systemd service
-    cp "${INSTALL_DIR}/config/hakpak.service" /etc/systemd/system/
-    
-    # Enable service
-    systemctl daemon-reload
-    systemctl enable hakpak.service
-    
-    # Configure Nginx
-    cp "${INSTALL_DIR}/config/nginx-hakpak" /etc/nginx/sites-available/
-    ln -sf /etc/nginx/sites-available/nginx-hakpak /etc/nginx/sites-enabled/
-    
-    # Remove default site if it exists
-    if [ -f "/etc/nginx/sites-enabled/default" ]; then
-        rm /etc/nginx/sites-enabled/default
-    fi
-    
-    # Restart Nginx
-    systemctl restart nginx
-    
-    # Configure hostapd for access point
-    echo -e "${YELLOW}Configuring WiFi access point...${NC}"
-    
-    cat > /etc/hostapd/hostapd.conf << EOF
-interface=wlan0
-driver=nl80211
-ssid=hakpak
-hw_mode=g
-channel=6
-wmm_enabled=0
-macaddr_acl=0
-auth_algs=1
-ignore_broadcast_ssid=0
-wpa=2
-wpa_passphrase=pentestallthethings
-wpa_key_mgmt=WPA-PSK
-wpa_pairwise=TKIP
-rsn_pairwise=CCMP
+# Install Python dependencies
+echo "Installing Python dependencies..."
+pip install -r requirements.txt
+
+# Copy application files
+echo "Installing HakPak application..."
+cp -r app /opt/hakpak/
+cp -r flipper_integration /opt/hakpak/
+cp -r scripts /opt/hakpak/
+cp wsgi.py /opt/hakpak/
+cp config/hakpak.service /etc/systemd/system/
+cp config/nginx-hakpak /etc/nginx/sites-available/hakpak
+
+# Configure Nginx
+echo "Configuring Nginx..."
+ln -sf /etc/nginx/sites-available/hakpak /etc/nginx/sites-enabled/
+rm -f /etc/nginx/sites-enabled/default
+
+# Configure WiFi Access Point
+echo "Configuring WiFi Access Point..."
+cp config/hostapd.conf /etc/hostapd/
+cp config/dnsmasq.conf /etc/
+cp config/interfaces /etc/network/
+
+# Set up Flipper Zero udev rules
+echo "Setting up Flipper Zero udev rules..."
+cat > /etc/udev/rules.d/42-flipper.rules << EOF
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0483", ATTRS{idProduct}=="5740", SYMLINK+="flipper"
 EOF
-    
-    # Configure hostapd to use config file
-    sed -i 's|#DAEMON_CONF=""|DAEMON_CONF="/etc/hostapd/hostapd.conf"|' /etc/default/hostapd
-    
-    # Configure dnsmasq for DHCP
-    cat > /etc/dnsmasq.conf << EOF
-interface=wlan0
-dhcp-range=192.168.4.2,192.168.4.20,255.255.255.0,24h
-dhcp-option=3,192.168.4.1
-dhcp-option=6,192.168.4.1
-server=8.8.8.8
-log-queries
-log-dhcp
-listen-address=127.0.0.1
-EOF
-    
-    # Configure networking
-    cat >> /etc/network/interfaces << EOF
 
-# HakPak Access Point
-allow-hotplug wlan0
-iface wlan0 inet static
-    address 192.168.4.1
-    netmask 255.255.255.0
-EOF
-    
-    echo -e "${GREEN}Services configured successfully${NC}"
-    return 0
+# Create default configuration
+echo "Creating default configuration..."
+cat > /etc/hakpak/config.json << EOF
+{
+    "wifi": {
+        "ssid": "hakpak",
+        "password": "pentestallthethings",
+        "channel": 6
+    },
+    "flipper": {
+        "port": "/dev/flipper",
+        "baudrate": 115200
+    },
+    "web": {
+        "host": "0.0.0.0",
+        "port": 5000
+    }
 }
+EOF
 
-# Main installation process
-echo -e "${YELLOW}Starting installation...${NC}"
+# Set permissions
+echo "Setting permissions..."
+chown -R root:root /opt/hakpak
+chmod -R 755 /opt/hakpak
+chmod +x /opt/hakpak/scripts/*.sh
 
-# Install dependencies
-if install_dependencies; then
-    echo -e "${GREEN}Dependencies installed successfully${NC}"
-else
-    echo -e "${RED}Failed to install dependencies${NC}"
-    exit 1
-fi
+# Enable and start services
+echo "Enabling services..."
+systemctl daemon-reload
+systemctl enable hakpak
+systemctl enable hostapd
+systemctl enable dnsmasq
 
-# Install HakPak
-if install_hakpak; then
-    echo -e "${GREEN}HakPak installed successfully${NC}"
-else
-    echo -e "${RED}Failed to install HakPak${NC}"
-    exit 1
-fi
+# Restart networking and services
+echo "Starting services..."
+systemctl restart networking
+systemctl restart hostapd
+systemctl restart dnsmasq
+systemctl restart nginx
+systemctl start hakpak
 
-# Install Python requirements
-if install_python_requirements; then
-    echo -e "${GREEN}Python requirements installed successfully${NC}"
-else
-    echo -e "${RED}Failed to install Python requirements${NC}"
-    exit 1
-fi
-
-# Configure services
-if configure_services; then
-    echo -e "${GREEN}Services configured successfully${NC}"
-else
-    echo -e "${RED}Failed to configure services${NC}"
-    exit 1
-fi
-
-# Setup Flipper Zero if available
-echo -e "${YELLOW}Setting up Flipper Zero...${NC}"
-if "${INSTALL_DIR}/scripts/setup_flipper.sh"; then
-    echo -e "${GREEN}Flipper Zero setup complete${NC}"
-else
-    echo -e "${YELLOW}Flipper Zero setup skipped or failed${NC}"
-    echo -e "${YELLOW}You can run the Flipper Zero setup later with: sudo ${INSTALL_DIR}/scripts/setup_flipper.sh${NC}"
-fi
-
-echo -e "${GREEN}===== Installation Complete =====${NC}"
-echo -e "HakPak has been installed to ${INSTALL_DIR}"
-echo -e "The web interface should be accessible at http://hakpak.local or http://192.168.4.1"
-echo -e "To start the service, run: sudo systemctl start hakpak.service"
-echo -e "To check the status, run: sudo systemctl status hakpak.service"
-
-# Ask to reboot
-echo ""
-read -p "A reboot is recommended to complete the installation. Reboot now? (y/n) " -n 1 -r
-echo ""
-if [[ $REPLY =~ ^[Yy]$ ]]; then
-    echo -e "${YELLOW}Rebooting...${NC}"
-    reboot
-fi
-
-exit 0 
+echo "✅ HakPak installation complete!"
+echo "Access the web interface at http://hakpak.local or http://192.168.4.1"
+echo "Default WiFi SSID: hakpak"
+echo "Default WiFi Password: pentestallthethings" 
