@@ -59,6 +59,9 @@ cp config/hostapd.conf /etc/hostapd/
 cp config/dnsmasq.conf /etc/
 cp config/interfaces /etc/network/
 
+# Configure hostapd to use our config file
+sed -i 's|#DAEMON_CONF=""|DAEMON_CONF="/etc/hostapd/hostapd.conf"|' /etc/default/hostapd
+
 # Set up Flipper Zero udev rules
 echo "Setting up Flipper Zero udev rules..."
 cat > /etc/udev/rules.d/42-flipper.rules << EOF
@@ -94,6 +97,11 @@ chmod +x /opt/hakpak/scripts/*.sh
 # Enable and start services
 echo "Enabling services..."
 systemctl daemon-reload
+
+# Unmask and enable hostapd and dnsmasq
+echo "Unmasking services..."
+systemctl unmask hostapd
+systemctl unmask dnsmasq
 systemctl enable hakpak
 systemctl enable hostapd
 systemctl enable dnsmasq
