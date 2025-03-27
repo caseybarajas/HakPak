@@ -2,7 +2,7 @@
 auto lo
 iface lo inet loopback
 
-# The primary network interface
+# The primary network interface (wired)
 allow-hotplug eth0
 iface eth0 inet dhcp
 
@@ -13,9 +13,20 @@ iface wlan0 inet static
     netmask 255.255.255.0
     network 192.168.4.0
     broadcast 192.168.4.255
+    
+    # Enable IP forwarding from wlan0 to eth0
+    post-up echo 1 > /proc/sys/net/ipv4/ip_forward
+    
+    # NAT configuration
     post-up iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
     post-up iptables -A FORWARD -i eth0 -o wlan0 -m state --state RELATED,ESTABLISHED -j ACCEPT
     post-up iptables -A FORWARD -i wlan0 -o eth0 -j ACCEPT
+    
+    # Cleanup when interface goes down
+    post-down echo 0 > /proc/sys/net/ipv4/ip_forward
     post-down iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
     post-down iptables -D FORWARD -i eth0 -o wlan0 -m state --state RELATED,ESTABLISHED -j ACCEPT
-    post-down iptables -D FORWARD -i wlan0 -o eth0 -j ACCEPT 
+    post-down iptables -D FORWARD -i wlan0 -o eth0 -j ACCEPT
+    
+    # Ensure wlan0 stays up even if connection fails
+    post-up ip link set dev wlan0 up 

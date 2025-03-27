@@ -1,6 +1,8 @@
 [Unit]
 Description=HakPak - Portable Pentesting Platform
 After=network.target
+Wants=nginx.service
+Requires=network.target
 
 [Service]
 Type=simple
@@ -8,9 +10,22 @@ User=root
 Group=root
 WorkingDirectory=/opt/hakpak
 Environment=PATH=/opt/hakpak/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-ExecStart=/opt/hakpak/venv/bin/gunicorn --workers 4 --bind unix:/tmp/hakpak.sock wsgi:app
+ExecStart=/opt/hakpak/venv/bin/gunicorn --workers 4 --bind unix:/tmp/hakpak.sock --log-level info --access-logfile /var/log/hakpak/access.log --error-logfile /var/log/hakpak/error.log wsgi:app
 Restart=always
 RestartSec=5
+TimeoutStartSec=30
+TimeoutStopSec=30
+KillMode=mixed
+PrivateTmp=true
+
+# Proper logging
+StandardOutput=journal
+StandardError=journal
+
+# Resource limits
+LimitNOFILE=65536
+CPUQuota=80%
+MemoryLimit=2G
 
 [Install]
 WantedBy=multi-user.target 
