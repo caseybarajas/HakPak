@@ -1,4 +1,4 @@
-# 🔐 HakPak: Portable Pentesting Platform (HEAVY WIP)
+# 🔐 HakPak: Portable Pentesting Platform
 
 [![Kali Linux](https://img.shields.io/badge/Kali-268BEE?style=for-the-badge&logo=kalilinux&logoColor=white)](https://www.kali.org/)
 [![Raspberry Pi](https://img.shields.io/badge/Raspberry%20Pi-C51A4A?style=for-the-badge&logo=Raspberry-Pi)](https://www.raspberrypi.org/)
@@ -7,9 +7,7 @@
 
 ## 🌟 Overview
 
-HakPak is an all-in-one portable penetration testing platform that combines the software capabilities of a Raspberry Pi 4 running Kali Linux with the hardware interaction features of a Flipper Zero, all in a compact, battery-powered package controllable via a web interface.
-
-![HakPak Device](https://placeholder-for-hakpak-image.com/hakpak.jpg)
+HakPak is an all-in-one portable penetration testing platform that combines the software capabilities of a Raspberry Pi running Kali Linux with the hardware interaction features of a Flipper Zero, all in a compact, battery-powered package controllable via a web interface.
 
 Designed for security professionals and ethical hackers, HakPak provides a comprehensive toolkit for both wireless and physical penetration testing in a discreet, backpack-friendly form factor.
 
@@ -31,11 +29,11 @@ Designed for security professionals and ethical hackers, HakPak provides a compr
 - Raspberry Pi 4 (4GB or 8GB RAM recommended)
 - Flipper Zero
 - 10,000-20,000mAh Power Bank
-- Custom 3D Printed Case (files included)
 - microSD Card (64GB+ recommended)
-- Small USB hub (optional)
-- Heat sinks/cooling solution for Pi
-- **Jumper wires** for GPIO connection (optional, if using UART instead of USB)
+- WiFi adapter (built-in or external)
+- Optional: Custom 3D Printed Case (files included)
+- Optional: Small USB hub
+- Optional: Heat sinks/cooling solution for Pi
 
 ### Software Stack
 
@@ -48,18 +46,11 @@ Designed for security professionals and ethical hackers, HakPak provides a compr
 
 ## 📋 Installation
 
-### Preparing the Raspberry Pi
+### Quick Installation (Recommended)
 
-1. Download and flash the latest Kali Linux ARM image to your microSD card:
-```bash
-# Download the latest Kali Linux ARM image
-wget https://kali.download/arm-images/kali-2023.1/kali-linux-2023.1-raspberry-pi-arm64.img.xz
+1. Start with a fresh installation of Kali Linux on your Raspberry Pi
 
-# Flash to microSD card (replace sdX with your device)
-sudo dd if=kali-linux-2023.1-raspberry-pi-arm64.img.xz of=/dev/sdX bs=4M status=progress
-```
-
-2. Boot your Raspberry Pi with the flashed SD card and perform initial setup:
+2. Clone the repository and run the setup script:
 ```bash
 # Update the system
 sudo apt update && sudo apt upgrade -y
@@ -67,168 +58,145 @@ sudo apt update && sudo apt upgrade -y
 # Clone this repository
 git clone https://github.com/caseybarajas/hakpak.git
 cd hakpak
+
+# Run the automated setup script
+sudo chmod +x scripts/hakpak_setup.sh
+sudo ./scripts/hakpak_setup.sh
 ```
 
-3. Run the installation script:
-```bash
-# Make the installation script executable
-sudo chmod +x scripts/install.sh
+The setup script will automatically:
+- Install all required dependencies
+- Configure the WiFi access point
+- Set up network routing
+- Configure all services
+- Create the web interface
+- Set up Flipper Zero connection
 
-# Run the installation script
-sudo ./scripts/install.sh
+3. After setup completes (or after a reboot), connect to the `hakpak` WiFi network:
+   - Password: `pentestallthethings`
+   - Access the web interface at `http://192.168.4.1`
+
+### Manual Installation (Advanced Users)
+
+If you prefer to install components manually:
+
+1. Install required packages:
+```bash
+sudo apt update
+sudo apt install hostapd dnsmasq nginx python3-pip python3-venv git usbutils rfkill iw wireless-tools
 ```
 
-The installation script will:
-1. Install required packages
-2. Configure the WiFi access point
-3. Set up the web interface
-4. Configure the Flipper Zero connection
-5. Enable services to start on boot
-
-### Troubleshooting Installation
-
-If you encounter issues during installation, use the verification script to diagnose problems:
-
+2. Configure network services:
 ```bash
-sudo chmod +x scripts/verify_install.sh
-sudo ./scripts/verify_install.sh
-```
-
-Common issues and solutions:
-
-1. **Masked services**: If hostapd or dnsmasq are masked, unmask them manually:
-```bash
+# Configure hostapd
+sudo nano /etc/hostapd/hostapd.conf
+# Configure dnsmasq
+sudo nano /etc/dnsmasq.conf
+# Enable services
 sudo systemctl unmask hostapd
-sudo systemctl unmask dnsmasq
-sudo systemctl enable hostapd
-sudo systemctl enable dnsmasq
+sudo systemctl enable hostapd dnsmasq
 ```
 
-2. **Service failures**: Check service logs for detailed error messages:
+3. Set up the Python environment:
 ```bash
-sudo journalctl -u hakpak -f
-sudo journalctl -u hostapd -f
+python3 -m venv /opt/hakpak/venv
+/opt/hakpak/venv/bin/pip install -r requirements.txt
 ```
 
-### Connecting the Flipper Zero
-
-The Flipper Zero can be connected either via USB or UART:
-
-#### USB Connection (Recommended)
-
-1. Connect your Flipper Zero to the Raspberry Pi using a USB cable
-2. Run the Flipper Zero setup script:
+4. Create and enable the HakPak service:
 ```bash
-sudo chmod +x scripts/setup_flipper.sh
-sudo ./scripts/setup_flipper.sh
+sudo cp config/hakpak.service /etc/systemd/system/
+sudo systemctl enable hakpak
+sudo systemctl start hakpak
 ```
 
-3. If the Flipper Zero is not automatically detected, use the fix script:
-```bash
-sudo chmod +x scripts/fix_flipper_detection.sh
-sudo ./scripts/fix_flipper_detection.sh
-```
-
-#### UART Connection (Alternative)
-
-For UART connection, follow this wiring diagram:
-
-| Raspberry Pi (GPIO) | Flipper Zero    | Function |
-|---------------------|-----------------|----------|
-| Pin 6 (GND)         | GND Pin (18)    | Ground   |
-| Pin 8 (GPIO14/TXD)  | RX Pin (14/PB7) | Data TX  |
-| Pin 10 (GPIO15/RXD) | TX Pin (13/PB6) | Data RX  |
-| Pin 4 (5V)          | 5V Pin (Optional)| Power    |
-
-For a visual connection diagram, see the [detailed pinout documentation](docs/pinout.md).
-
-ASCII Connection Diagram:
-```
-Raspberry Pi   Flipper Zero    
---------------+--------------
-GPIO 8 (TXD) -|-> Pin 14 (RX)
-GPIO 10 (RXD) <-|- Pin 13 (TX)
-Pin 6 (GND) ----|-- Pin 18 (GND)
-Pin 4 (5V) -----|-- 5V (Optional)
-```
-
-To enable UART:
-```bash
-sudo raspi-config
-# Navigate to Interface Options > Serial Port
-# Disable serial login shell, but enable serial hardware
-```
+See the [detailed installation guide](docs/installation.md) for complete manual installation instructions.
 
 ## 🚀 Usage
 
-### Starting the System
+### Connecting to HakPak
 
-1. Power on the system by connecting the battery pack
-2. Wait approximately 60 seconds for boot sequence
-3. Connect to the HakPak WiFi network (default SSID: `hakpak`)
-   - Default password: `pentestallthethings`
-4. Access the web interface at `http://hakpak.local` or `http://192.168.4.1`
+1. Power on your Raspberry Pi
+2. Connect to the `hakpak` WiFi network
+   - Password: `pentestallthethings`
+3. Open your browser and navigate to `http://192.168.4.1`
+4. Log in with default credentials:
+   - Username: `admin`
+   - Password: `hakpak`
 
 ### Web Interface
 
-The web interface provides access to all functionality:
+The web interface provides easy access to all functionality:
 
-- **Dashboard**: System status, battery levels, active connections
-- **Kali Tools**: Access to common Kali Linux pentesting tools
-- **Flipper Control**: Interface with Flipper Zero functions
-  - IR control (transmit and record signals)
-  - RFID operations (read, write, clone)
-  - SubGHz functions (receive and transmit on various frequencies)
-- **Scan Tools**: WiFi, Bluetooth, and RF scanning utilities
-- **Settings**: Configure network, services, and system settings
+- **Dashboard**: System status and monitoring
+- **Kali Tools**: Access to common Kali Linux tools
+- **Flipper Zero**: Control your Flipper Zero device
+  - IR operations (transmit, record)
+  - RFID operations (read, write, emulate)
+  - SubGHz functionality
+- **Network Tools**: WiFi/Bluetooth scanning and attack tools
+- **Settings**: Configure device and connection settings
 
-### Flipper Zero Integration Features
+### Connecting Your Flipper Zero
 
-- **IR Control**: Send and record infrared signals for TVs, ACs, and other IR devices
-- **RFID/NFC**: Read, write and emulate RFID cards and tags
-- **SubGHz**: Capture and replay Sub-GHz signals from various devices
-- **GPIO Control**: Interface with external hardware via GPIO pins
-- **iButton**: Read and emulate iButton/1-Wire devices
+Simply connect your Flipper Zero to the Raspberry Pi via USB. The system will automatically detect and configure the device. For detailed setup, see [Flipper Zero setup guide](docs/flipper_setup.md).
 
 ## 🔧 Troubleshooting
 
-Common issues and solutions:
+If you encounter any issues, try these troubleshooting steps:
 
-- **System doesn't boot**: Check battery level and connections
-- **Web interface not accessible**: Verify WiFi connection and IP address
-  - Run `ifconfig` to check your network configuration
-  - Try accessing via IP address (192.168.4.1) if hostname doesn't work
-- **Flipper Zero not detected**: Check USB connection and run `sudo ./scripts/fix_flipper_detection.sh`
-  - If using UART, verify the wiring connections
-  - Check `dmesg` output for connection issues
-- **WiFi access point not working**: Run `sudo systemctl status hostapd` and `sudo systemctl status dnsmasq`
-  - If services are masked, run `sudo systemctl unmask hostapd` and `sudo systemctl unmask dnsmasq`
-  - If services fail to start, check configuration files in `/etc/hostapd/` and `/etc/`
+1. **Run the health check script**:
+```bash
+sudo ./scripts/health_check.sh
+```
+
+2. **Check all services are running**:
+```bash
+sudo systemctl status hostapd dnsmasq nginx hakpak
+```
+
+3. **Restart the services**:
+```bash
+sudo systemctl restart hostapd dnsmasq nginx hakpak
+```
+
+4. **Verify WiFi interface**:
+```bash
+sudo iw dev
+```
+
+5. **If nothing else works, reboot**:
+```bash
+sudo reboot
+```
+
+For more detailed troubleshooting, see [troubleshooting guide](docs/troubleshooting.md).
+
+## 🔄 Updates
+
+To update HakPak to the latest version:
+
+```bash
+cd ~/hakpak
+git pull
+sudo ./scripts/hakpak_setup.sh
+```
 
 ## 🛠️ Customization
 
-### Hardware Expansion
+### Configuration Options
 
-The system can be expanded with additional hardware:
+Primary settings can be modified in the `config/` directory:
+- `config/hakpak.conf`: Main application settings
+- `/etc/hostapd/hostapd.conf`: WiFi access point settings
+- `/etc/dnsmasq.conf`: DHCP and DNS settings
 
-- GPS module for geolocation
-- Additional antennas for extended range
-- SDR (Software Defined Radio) for advanced RF capabilities
-- External storage for increased capacity
+### Adding Custom Features
 
-### Software Customization
-
-The HakPak web application is built on a modular Flask architecture:
-
-- Controllers are located in `app/controllers/`
-- Templates are in `app/templates/`
-- Static files (CSS, JS) are in `app/static/`
-- Configuration files are in `config/`
-
-To add a new feature:
-1. Create a new controller in `app/controllers/`
-2. Add your template in `app/templates/`
-3. Register your blueprint in `app/__init__.py`
+HakPak follows a modular architecture for easy extension:
+- Add new controllers in `app/controllers/`
+- Add new templates in `app/templates/`
+- Register new blueprints in `app/__init__.py`
 
 ## 📝 License
 

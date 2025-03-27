@@ -2,7 +2,7 @@
 
 # HakPak Complete Setup Script
 # This script sets up HakPak with proper networking configuration
-# allowing SSH connection to remain active while setting up the AP
+# for any Raspberry Pi running Kali Linux
 
 set -e
 BLUE='\033[0;34m'
@@ -49,86 +49,115 @@ check_command() {
     fi
 }
 
+# Create backup directory
+BACKUP_DIR="/opt/hakpak/backups/$(date +%Y%m%d%H%M%S)"
+mkdir -p $BACKUP_DIR
+
 # Check for required packages
 status "Checking required packages..."
-PACKAGES="hostapd dnsmasq nginx python3-pip usbutils git rfkill iw wireless-tools"
+PACKAGES="hostapd dnsmasq nginx python3-pip python3-venv usbutils git rfkill iw wireless-tools"
+apt update
 for pkg in $PACKAGES; do
     if ! dpkg -s $pkg >/dev/null 2>&1; then
-        warning "$pkg not installed. Installing..."
-        apt update
+        status "Installing $pkg..."
         apt install -y $pkg
     fi
 done
 success "All required packages are installed"
 
-# Check if NetworkManager is running and controlling wlan0
-status "Checking network configuration..."
-if systemctl is-active NetworkManager >/dev/null 2>&1; then
-    warning "NetworkManager is active and might control your wireless interfaces"
-    
-    # Create NetworkManager config to ignore wlan0
-    status "Configuring NetworkManager to ignore wlan0 for HakPak..."
-    mkdir -p /etc/NetworkManager/conf.d/
-    cat > /etc/NetworkManager/conf.d/hakpak.conf << EOF
-[keyfile]
-unmanaged-devices=interface-name:wlan0
-EOF
-    check_command systemctl restart NetworkManager
-    success "NetworkManager configured to ignore wlan0"
+# Detect wireless interfaces
+status "Detecting wireless interfaces..."
+WIFI_INTERFACES=($(iw dev | grep Interface | awk '{print $2}'))
+
+if [ ${#WIFI_INTERFACES[@]} -eq 0 ]; then
+    error "No wireless interfaces found. Please check your hardware."
 fi
 
-# Identify primary network interface
+# Select wireless interface for AP
+if [ ${#WIFI_INTERFACES[@]} -gt 1 ]; then
+    status "Multiple wireless interfaces found:"
+    for i in "${!WIFI_INTERFACES[@]}"; do
+        echo "$i: ${WIFI_INTERFACES[$i]}"
+    done
+    
+    AP_INTERFACE=${WIFI_INTERFACES[0]}
+    status "Using ${AP_INTERFACE} for Access Point mode. To use a different interface, edit hostapd.conf manually."
+else
+    AP_INTERFACE=${WIFI_INTERFACES[0]}
+    status "Using ${AP_INTERFACE} for Access Point mode"
+fi
+
+# Identify primary network interface for internet connection
 status "Identifying primary network interface..."
 if ip a | grep -q "eth0"; then
     PRIMARY_IFACE="eth0"
     success "Found Ethernet interface: eth0"
 else
     # Look for the interface that has an IP (likely what SSH is using)
-    SSH_IFACE=$(ip -o -4 route get 8.8.8.8 | awk '{print $5}')
-    if [[ "$SSH_IFACE" == "wlan0" ]]; then
-        warning "You appear to be using wlan0 for SSH. This will be reconfigured for AP mode."
-        warning "This script will likely DISCONNECT your SSH session."
-        read -p "Continue? (y/n) " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            error "Aborted by user. Please connect via Ethernet and try again."
-        fi
-        PRIMARY_IFACE=""
+    SSH_IFACE=$(ip -o -4 route get 8.8.8.8 2>/dev/null | awk '{print $5}')
+    
+    # If SSH interface is the same as AP interface, warn user
+    if [[ "$SSH_IFACE" == "$AP_INTERFACE" ]]; then
+        warning "You appear to be using $AP_INTERFACE for network connectivity."
+        warning "Setting up the access point may disconnect your SSH session."
+        warning "If disconnected, connect to the 'hakpak' WiFi network with password 'pentestallthethings'"
+        warning "and access the Pi at 192.168.4.1"
     else
         PRIMARY_IFACE="$SSH_IFACE"
         success "Using interface $PRIMARY_IFACE for internet connectivity"
     fi
 fi
 
-# Configure wlan0 for AP mode
-status "Configuring wlan0 for Access Point mode..."
-
-# Stop services that might interfere
+# Stop network services
 status "Stopping network services..."
 systemctl stop hostapd dnsmasq 2>/dev/null || true
 
+# Handle any conflicting services
+status "Checking for conflicting services..."
+
+# Check if NetworkManager is controlling wireless
+if systemctl is-active NetworkManager >/dev/null 2>&1; then
+    status "Configuring NetworkManager to ignore ${AP_INTERFACE}..."
+    mkdir -p /etc/NetworkManager/conf.d/
+    echo -e "[keyfile]\nunmanaged-devices=interface-name:${AP_INTERFACE}" > /etc/NetworkManager/conf.d/hakpak.conf
+    check_command systemctl restart NetworkManager
+fi
+
 # Check for processes using port 53
-status "Checking for processes using port 53..."
-PORT_53_PROCESS=$(lsof -i :53 | grep LISTEN | awk '{print $1}' | uniq)
+PORT_53_PROCESS=$(lsof -i :53 2>/dev/null | grep LISTEN | awk '{print $1}' | uniq)
 if [ ! -z "$PORT_53_PROCESS" ]; then
-    warning "Found $PORT_53_PROCESS using port 53. Attempting to stop..."
-    if [ "$PORT_53_PROCESS" = "systemd-r" ]; then
-        # Handle systemd-resolved specifically
-        systemctl stop systemd-resolved
-        
-        # Update resolv.conf to use another DNS
-        cat > /etc/resolv.conf << EOF
-nameserver 8.8.8.8
-nameserver 8.8.4.4
-EOF
+    warning "Found $PORT_53_PROCESS using port 53. Attempting to handle..."
+    
+    # Handle systemd-resolved
+    if [[ "$PORT_53_PROCESS" == *"systemd-r"* ]]; then
+        status "Configuring systemd-resolved to work with dnsmasq..."
+        if [ -f /etc/systemd/resolved.conf ]; then
+            cp /etc/systemd/resolved.conf ${BACKUP_DIR}/resolved.conf.bak
+            sed -i 's/#DNSStubListener=yes/DNSStubListener=no/' /etc/systemd/resolved.conf
+            systemctl restart systemd-resolved
+        fi
+    else
+        warning "Unknown service using port 53. You may need to manually stop it."
     fi
+fi
+
+# Backup existing configurations
+status "Backing up existing configurations..."
+if [ -f /etc/hostapd/hostapd.conf ]; then
+    cp /etc/hostapd/hostapd.conf ${BACKUP_DIR}/hostapd.conf.bak
+fi
+if [ -f /etc/dnsmasq.conf ]; then
+    cp /etc/dnsmasq.conf ${BACKUP_DIR}/dnsmasq.conf.bak
+fi
+if [ -f /etc/network/interfaces ]; then
+    cp /etc/network/interfaces ${BACKUP_DIR}/interfaces.bak
 fi
 
 # Configure hostapd
 status "Configuring hostapd..."
 cat > /etc/hostapd/hostapd.conf << EOF
 # Basic configuration
-interface=wlan0
+interface=${AP_INTERFACE}
 driver=nl80211
 ssid=hakpak
 hw_mode=g
@@ -163,13 +192,18 @@ logger_stdout_level=2
 ieee80211w=0
 EOF
 
+# Configure hostapd default file
+cat > /etc/default/hostapd << EOF
+DAEMON_CONF="/etc/hostapd/hostapd.conf"
+EOF
+
 success "Hostapd configured"
 
 # Configure dnsmasq
 status "Configuring dnsmasq..."
 cat > /etc/dnsmasq.conf << EOF
 # Interface to bind to
-interface=wlan0
+interface=${AP_INTERFACE}
 bind-interfaces
 except-interface=lo
 no-dhcp-interface=lo
@@ -204,15 +238,16 @@ server=8.8.4.4
 # DHCP options
 dhcp-authoritative
 dhcp-leasefile=/var/lib/misc/dnsmasq.leases
+
+# Improve startup reliability
+bind-dynamic
 EOF
 
 success "Dnsmasq configured"
 
-# Configure network
-status "Configuring network interfaces..."
-
 # Add Nginx config for HakPak
 status "Configuring Nginx..."
+mkdir -p /etc/nginx/sites-available/
 cat > /etc/nginx/sites-available/hakpak << EOF
 server {
     listen 80 default_server;
@@ -234,20 +269,25 @@ server {
 }
 EOF
 
+# Create public directory
+mkdir -p /var/www/hakpak/public
+echo "<html><body><h1>HakPak</h1><p>If you see this page, Nginx is running but the HakPak application is not.</p></body></html>" > /var/www/hakpak/public/index.html
+
 # Enable Nginx site
+mkdir -p /etc/nginx/sites-enabled/
 ln -sf /etc/nginx/sites-available/hakpak /etc/nginx/sites-enabled/
 rm -f /etc/nginx/sites-enabled/default
 
 # Configure network interfaces
-status "Setting up wlan0 interface..."
+status "Setting up ${AP_INTERFACE} interface..."
 rfkill unblock wifi
-ip addr flush dev wlan0 2>/dev/null || true
-ip addr add 192.168.4.1/24 dev wlan0
-ip link set wlan0 up
+ip addr flush dev ${AP_INTERFACE} 2>/dev/null || true
+ip addr add 192.168.4.1/24 dev ${AP_INTERFACE}
+ip link set ${AP_INTERFACE} up
 
 # Set up IP forwarding and NAT if we have a primary interface
-if [ ! -z "$PRIMARY_IFACE" ]; then
-    status "Setting up IP forwarding and NAT..."
+if [ ! -z "$PRIMARY_IFACE" ] && [ "$PRIMARY_IFACE" != "$AP_INTERFACE" ]; then
+    status "Setting up IP forwarding and NAT for internet sharing..."
     echo 1 > /proc/sys/net/ipv4/ip_forward
     
     # Set up persistent IP forwarding
@@ -259,13 +299,14 @@ if [ ! -z "$PRIMARY_IFACE" ]; then
     iptables -t nat -F
     iptables -t nat -A POSTROUTING -o $PRIMARY_IFACE -j MASQUERADE
     iptables -F
-    iptables -A FORWARD -i $PRIMARY_IFACE -o wlan0 -m state --state RELATED,ESTABLISHED -j ACCEPT
-    iptables -A FORWARD -i wlan0 -o $PRIMARY_IFACE -j ACCEPT
+    iptables -A FORWARD -i $PRIMARY_IFACE -o ${AP_INTERFACE} -m state --state RELATED,ESTABLISHED -j ACCEPT
+    iptables -A FORWARD -i ${AP_INTERFACE} -o $PRIMARY_IFACE -j ACCEPT
     
     # Make iptables rules persistent
     if command -v iptables-save >/dev/null 2>&1; then
         status "Making iptables rules persistent..."
-        iptables-save > /etc/iptables.rules
+        mkdir -p /etc/iptables/
+        iptables-save > /etc/iptables/rules.v4
         
         # Create a service to restore iptables rules
         cat > /etc/systemd/system/iptables-restore.service << EOF
@@ -275,64 +316,60 @@ After=network.target
 
 [Service]
 Type=oneshot
-ExecStart=/sbin/iptables-restore /etc/iptables.rules
+ExecStart=/sbin/iptables-restore /etc/iptables/rules.v4
 RemainAfterExit=yes
 
 [Install]
 WantedBy=multi-user.target
 EOF
+        systemctl daemon-reload
         systemctl enable iptables-restore.service
     fi
     
     success "IP forwarding and NAT configured"
 else
-    warning "No primary interface found for internet forwarding. HakPak will operate in standalone mode."
+    status "No separate interface found for internet sharing."
+    status "HakPak will operate in standalone mode."
 fi
 
-# Start services in the correct order
-status "Starting network services..."
+# Set up HakPak application
+status "Setting up HakPak application..."
 
-# Test hostapd configuration
-status "Testing hostapd configuration..."
-if ! hostapd -t /etc/hostapd/hostapd.conf; then
-    error "Hostapd configuration is invalid!"
+# Create HakPak directories
+mkdir -p /opt/hakpak
+mkdir -p /opt/hakpak/data
+mkdir -p /opt/hakpak/logs
+
+# Set up Python environment if it doesn't exist
+if [ ! -d "/opt/hakpak/venv" ]; then
+    status "Creating Python virtual environment..."
+    python3 -m venv /opt/hakpak/venv
 fi
 
-# Start hostapd
-status "Starting hostapd..."
-systemctl unmask hostapd
-systemctl enable hostapd
-systemctl restart hostapd
-sleep 3
+# Copy application files
+status "Copying application files..."
+cp -r ./* /opt/hakpak/ 2>/dev/null || true
 
-# Check if hostapd is running
-if ! systemctl is-active hostapd >/dev/null 2>&1; then
-    error "Failed to start hostapd. Check logs with: journalctl -xeu hostapd"
+# Install Python dependencies
+status "Installing Python dependencies..."
+/opt/hakpak/venv/bin/pip install --upgrade pip
+if [ -f "/opt/hakpak/requirements.txt" ]; then
+    /opt/hakpak/venv/bin/pip install -r /opt/hakpak/requirements.txt
+else
+    warning "requirements.txt not found. Python dependencies may be incomplete."
+    /opt/hakpak/venv/bin/pip install Flask Flask-SocketIO gunicorn eventlet pyserial RPi.GPIO gpiozero python-dotenv requests
 fi
-success "Hostapd started successfully"
 
-# Start dnsmasq
-status "Starting dnsmasq..."
-systemctl enable dnsmasq
-systemctl restart dnsmasq
-sleep 2
+# Set up Flipper Zero udev rules
+status "Setting up Flipper Zero udev rules..."
+cat > /etc/udev/rules.d/42-flipper.rules << EOF
+# Flipper Zero udev rules
+SUBSYSTEMS=="usb", ATTRS{idVendor}=="0483", ATTRS{idProduct}=="5740", MODE="0666", SYMLINK+="flipper"
+EOF
 
-# Check if dnsmasq is running
-if ! systemctl is-active dnsmasq >/dev/null 2>&1; then
-    error "Failed to start dnsmasq. Check logs with: journalctl -xeu dnsmasq"
-fi
-success "Dnsmasq started successfully"
-
-# Start nginx
-status "Starting nginx..."
-systemctl enable nginx
-systemctl restart nginx
-
-# Check if nginx is running
-if ! systemctl is-active nginx >/dev/null 2>&1; then
-    error "Failed to start nginx. Check logs with: journalctl -xeu nginx"
-fi
-success "Nginx started successfully"
+# Reload udev rules
+udevadm control --reload-rules
+udevadm trigger
 
 # Set up HakPak service
 status "Setting up HakPak service..."
@@ -340,7 +377,7 @@ cat > /etc/systemd/system/hakpak.service << EOF
 [Unit]
 Description=HakPak Web Service
 After=network.target
-Requires=hostapd.service dnsmasq.service
+Wants=hostapd.service dnsmasq.service
 
 [Service]
 ExecStart=/opt/hakpak/venv/bin/gunicorn --worker-class eventlet -w 1 --bind 127.0.0.1:5000 app:app
@@ -355,23 +392,110 @@ Environment=PYTHONUNBUFFERED=1
 WantedBy=multi-user.target
 EOF
 
-systemctl daemon-reload
-systemctl enable hakpak
+# Set appropriate permissions
+status "Setting permissions..."
+chown -R root:root /opt/hakpak
+chmod -R 755 /opt/hakpak
+find /opt/hakpak/scripts -type f -name "*.sh" -exec chmod +x {} \;
+
+# Start services in the correct order
+status "Starting network services..."
+
+# Ensure hostapd is unmasked
+systemctl unmask hostapd
+
+# Enable services
+systemctl enable hostapd dnsmasq nginx hakpak
+
+# Start hostapd
+status "Starting hostapd..."
+systemctl restart hostapd
+sleep 5  # Give hostapd time to initialize properly
+
+# Check if hostapd is running
+if ! systemctl is-active hostapd >/dev/null 2>&1; then
+    warning "Hostapd failed to start. Checking the configuration..."
+    hostapd -dd /etc/hostapd/hostapd.conf &
+    HOSTAPD_PID=$!
+    sleep 3
+    kill $HOSTAPD_PID 2>/dev/null || true
+    systemctl restart hostapd
+    sleep 2
+    
+    if ! systemctl is-active hostapd >/dev/null 2>&1; then
+        warning "Hostapd still not running. Check logs with: journalctl -xeu hostapd"
+    else
+        success "Hostapd started successfully on second attempt"
+    fi
+else
+    success "Hostapd started successfully"
+fi
+
+# Start dnsmasq
+status "Starting dnsmasq..."
+systemctl restart dnsmasq
+sleep 2
+
+# Check if dnsmasq is running
+if ! systemctl is-active dnsmasq >/dev/null 2>&1; then
+    warning "Failed to start dnsmasq. Trying alternative configuration..."
+    
+    # Try alternative configuration
+    cat > /etc/dnsmasq.conf << EOF
+# Simpler configuration
+interface=${AP_INTERFACE}
+bind-interfaces
+dhcp-range=192.168.4.2,192.168.4.100,255.255.255.0,24h
+dhcp-option=option:router,192.168.4.1
+dhcp-option=option:dns-server,8.8.8.8,8.8.4.4
+listen-address=127.0.0.1,192.168.4.1
+no-resolv
+server=8.8.8.8
+server=8.8.4.4
+EOF
+    
+    systemctl restart dnsmasq
+    sleep 2
+    
+    if ! systemctl is-active dnsmasq >/dev/null 2>&1; then
+        warning "Dnsmasq still not starting. Check logs with: journalctl -xeu dnsmasq"
+    else
+        success "Dnsmasq started with alternative configuration"
+    fi
+else
+    success "Dnsmasq started successfully"
+fi
+
+# Start nginx
+status "Starting nginx..."
+systemctl restart nginx
+
+# Check if nginx is running
+if ! systemctl is-active nginx >/dev/null 2>&1; then
+    warning "Nginx failed to start. Check logs with: journalctl -xeu nginx"
+else
+    success "Nginx started successfully"
+fi
+
+# Start hakpak
+status "Starting hakpak service..."
 systemctl restart hakpak
 
 # Check if hakpak is running
 if ! systemctl is-active hakpak >/dev/null 2>&1; then
-    error "Failed to start hakpak. Check logs with: journalctl -xeu hakpak"
+    warning "HakPak service failed to start. Check logs with: journalctl -xeu hakpak"
+else
+    success "HakPak service started successfully"
 fi
-success "HakPak service started successfully"
 
 # Verify AP mode
 status "Verifying AP mode..."
-if iw dev wlan0 info | grep -q "type AP"; then
-    success "WiFi AP is running on wlan0"
+if iw dev ${AP_INTERFACE} info 2>/dev/null | grep -q "type AP"; then
+    success "WiFi AP is running on ${AP_INTERFACE}"
 else
-    warning "WiFi AP is not correctly configured. Current state:"
-    iw dev wlan0 info
+    warning "WiFi AP is not in AP mode. Current state:"
+    iw dev ${AP_INTERFACE} info || echo "Unable to get interface info"
+    warning "You may need to reboot for changes to take effect"
 fi
 
 echo -e "${GREEN}========================================${NC}"
@@ -384,8 +508,11 @@ echo
 echo -e "If you don't see the WiFi network, try rebooting:"
 echo -e "${YELLOW}sudo reboot${NC}"
 echo
-echo -e "To check the system status, run:"
+echo -e "To check the system status after reboot, run:"
 echo -e "${YELLOW}sudo systemctl status hostapd dnsmasq nginx hakpak${NC}"
+echo
+echo -e "To troubleshoot issues, run the health check script:"
+echo -e "${YELLOW}sudo ./scripts/health_check.sh${NC}"
 echo
 echo -e "${GREEN}========================================${NC}"
 
