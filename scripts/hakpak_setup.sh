@@ -12,7 +12,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m'
 
 echo -e "${BLUE}========================================${NC}"
-echo -e "${BLUE}   HakPak Complete Setup Script        ${NC}"
+echo -e "${BLUE}   HakPak Setup Wizard                ${NC}"
 echo -e "${BLUE}========================================${NC}"
 
 # Check if running as root
@@ -42,6 +42,80 @@ warning() {
     echo -e "${YELLOW}[!] $1${NC}"
 }
 
+# Function to prompt for yes/no confirmation
+confirm() {
+    local prompt="$1"
+    local default="$2"
+    
+    if [ "$default" = "Y" ]; then
+        local options="[Y/n]"
+    else
+        local options="[y/N]"
+    fi
+    
+    read -p "$prompt $options " response
+    
+    if [ -z "$response" ]; then
+        response=$default
+    fi
+    
+    case "$response" in
+        [yY][eE][sS]|[yY]) 
+            return 0
+            ;;
+        [nN][oO]|[nN])
+            return 1
+            ;;
+        *)
+            echo "Invalid response. Please answer y or n."
+            confirm "$prompt" "$default"
+            ;;
+    esac
+}
+
+# Function to prompt for multiple-choice selection
+select_option() {
+    local prompt="$1"
+    shift
+    local options=("$@")
+    
+    echo "$prompt"
+    for i in "${!options[@]}"; do
+        echo "  $((i+1)). ${options[$i]}"
+    done
+    
+    local valid=false
+    local choice
+    until $valid; do
+        read -p "Enter selection [1-${#options[@]}]: " choice
+        if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "${#options[@]}" ]; then
+            valid=true
+        else
+            echo "Invalid choice. Please enter a number between 1 and ${#options[@]}."
+        fi
+    done
+    
+    return $((choice-1))
+}
+
+# Function to prompt for string input
+prompt_string() {
+    local prompt="$1"
+    local default="$2"
+    local value=""
+    
+    if [ -z "$default" ]; then
+        read -p "$prompt: " value
+    else
+        read -p "$prompt [$default]: " value
+        if [ -z "$value" ]; then
+            value="$default"
+        fi
+    fi
+    
+    echo "$value"
+}
+
 # Function to check if command succeeds
 check_command() {
     if ! $@; then
@@ -49,9 +123,192 @@ check_command() {
     fi
 }
 
+# Detect wireless interfaces
+status "Scanning for wireless interfaces..."
+WIFI_INTERFACES=($(iw dev | grep Interface | awk '{print $2}'))
+
+if [ ${#WIFI_INTERFACES[@]} -eq 0 ]; then
+    error "No wireless interfaces found. Please check your hardware."
+fi
+
+# Welcome message
+echo
+echo -e "Welcome to the ${GREEN}HakPak${NC} interactive setup wizard!"
+echo -e "This wizard will help you configure your Raspberry Pi as a portable pentesting platform."
+echo -e "You'll be asked a series of questions to customize your installation."
+echo -e "Default values are shown in brackets - press Enter to accept the default."
+echo
+
+# Prompt for confirmation to start setup
+if ! confirm "Ready to begin setup?" "Y"; then
+    echo "Setup cancelled. No changes were made."
+    exit 0
+fi
+
+echo
+status "Gathering system information..."
+
+# Available wireless interfaces
+if [ ${#WIFI_INTERFACES[@]} -gt 1 ]; then
+    echo "Multiple wireless interfaces detected:"
+    for i in "${!WIFI_INTERFACES[@]}"; do
+        echo "  $((i+1))). ${WIFI_INTERFACES[$i]}"
+    done
+    
+    # Select wireless interface for AP
+    select_option "Which wireless interface should be used for the access point?" "${WIFI_INTERFACES[@]}"
+    AP_INTERFACE_INDEX=$?
+    AP_INTERFACE=${WIFI_INTERFACES[$AP_INTERFACE_INDEX]}
+else
+    AP_INTERFACE=${WIFI_INTERFACES[0]}
+    echo "Using ${AP_INTERFACE} for Access Point mode (only interface available)"
+fi
+
+# Identify primary network interface for internet connection
+if ip a | grep -q "eth0"; then
+    DEFAULT_INTERNET_IFACE="eth0"
+    echo "Ethernet interface (eth0) detected"
+else
+    # Look for the interface that has an IP (likely what SSH is using)
+    SSH_IFACE=$(ip -o -4 route get 8.8.8.8 2>/dev/null | awk '{print $5}')
+    if [ -n "$SSH_IFACE" ] && [ "$SSH_IFACE" != "$AP_INTERFACE" ]; then
+        DEFAULT_INTERNET_IFACE="$SSH_IFACE"
+        echo "Network interface $SSH_IFACE detected"
+    else
+        DEFAULT_INTERNET_IFACE=""
+    fi
+fi
+
+# Configuration variables - initialize with defaults
+SSID="hakpak"
+WIFI_PASSWORD="pentestallthethings"
+COUNTRY_CODE="US"
+CHANNEL=6
+IP_ADDRESS="192.168.4.1"
+DHCP_RANGE_START="192.168.4.2"
+DHCP_RANGE_END="192.168.4.100"
+ADMIN_PASSWORD="hakpak"
+ENABLE_INTERNET_SHARING=true
+USE_CUSTOM_DNS=false
+DNS1="8.8.8.8"
+DNS2="8.8.4.4"
+HOSTNAME="hakpak"
+INSTALL_DIR="/opt/hakpak"
+
+echo
+echo -e "${BLUE}========================================${NC}"
+echo -e "${BLUE}   Basic Configuration                ${NC}"
+echo -e "${BLUE}========================================${NC}"
+
+# Prompt for WiFi settings
+SSID=$(prompt_string "WiFi network name (SSID)" "$SSID")
+WIFI_PASSWORD=$(prompt_string "WiFi password (min 8 chars)" "$WIFI_PASSWORD")
+
+# Validate WiFi password length
+while [ ${#WIFI_PASSWORD} -lt 8 ]; do
+    warning "WiFi password must be at least 8 characters long."
+    WIFI_PASSWORD=$(prompt_string "WiFi password (min 8 chars)" "$WIFI_PASSWORD")
+done
+
+# Prompt for country code
+COUNTRY_CODE=$(prompt_string "WiFi country code (2-letter code)" "$COUNTRY_CODE")
+
+# Prompt for channel
+echo "Available WiFi channels: 1, 6, 11 (recommended for 2.4GHz)"
+CHANNEL=$(prompt_string "WiFi channel" "$CHANNEL")
+
+# Prompt for IP address
+IP_ADDRESS=$(prompt_string "HakPak IP address" "$IP_ADDRESS")
+
+# Prompt for admin password
+ADMIN_PASSWORD=$(prompt_string "Admin password for web interface" "$ADMIN_PASSWORD")
+
+# Prompt for hostname
+HOSTNAME=$(prompt_string "Hostname" "$HOSTNAME")
+
+echo
+echo -e "${BLUE}========================================${NC}"
+echo -e "${BLUE}   Advanced Configuration             ${NC}"
+echo -e "${BLUE}========================================${NC}"
+
+# Prompt for internet sharing
+if confirm "Enable internet sharing/routing to connected devices?" "Y"; then
+    ENABLE_INTERNET_SHARING=true
+    
+    if [ -n "$DEFAULT_INTERNET_IFACE" ]; then
+        echo "Internet connection interface detected: $DEFAULT_INTERNET_IFACE"
+        INTERNET_IFACE="$DEFAULT_INTERNET_IFACE"
+    else
+        INTERNET_IFACE=$(prompt_string "Interface for internet connection" "")
+        if [ -z "$INTERNET_IFACE" ]; then
+            warning "No internet interface specified. Internet sharing will be disabled."
+            ENABLE_INTERNET_SHARING=false
+        fi
+    fi
+else
+    ENABLE_INTERNET_SHARING=false
+fi
+
+# Prompt for custom DNS servers
+if confirm "Use custom DNS servers?" "N"; then
+    USE_CUSTOM_DNS=true
+    DNS1=$(prompt_string "Primary DNS server" "$DNS1")
+    DNS2=$(prompt_string "Secondary DNS server" "$DNS2")
+else
+    USE_CUSTOM_DNS=false
+fi
+
+# Prompt for installation directory
+INSTALL_DIR=$(prompt_string "Installation directory" "$INSTALL_DIR")
+
+echo
+echo -e "${BLUE}========================================${NC}"
+echo -e "${BLUE}   Installation Summary               ${NC}"
+echo -e "${BLUE}========================================${NC}"
+
+echo -e "WiFi Network Name: ${GREEN}$SSID${NC}"
+echo -e "WiFi Password: ${GREEN}$WIFI_PASSWORD${NC}"
+echo -e "WiFi Channel: ${GREEN}$CHANNEL${NC}"
+echo -e "Country Code: ${GREEN}$COUNTRY_CODE${NC}"
+echo -e "AP Interface: ${GREEN}$AP_INTERFACE${NC}"
+echo -e "IP Address: ${GREEN}$IP_ADDRESS${NC}"
+echo -e "Admin Password: ${GREEN}$ADMIN_PASSWORD${NC}"
+echo -e "Hostname: ${GREEN}$HOSTNAME${NC}"
+echo -e "Installation Directory: ${GREEN}$INSTALL_DIR${NC}"
+
+if [ "$ENABLE_INTERNET_SHARING" = true ]; then
+    echo -e "Internet Sharing: ${GREEN}Enabled${NC} (via $INTERNET_IFACE)"
+else
+    echo -e "Internet Sharing: ${RED}Disabled${NC}"
+fi
+
+if [ "$USE_CUSTOM_DNS" = true ]; then
+    echo -e "Custom DNS: ${GREEN}Enabled${NC} (Primary: $DNS1, Secondary: $DNS2)"
+else
+    echo -e "Custom DNS: ${RED}Disabled${NC} (Using default)"
+fi
+
+echo
+if ! confirm "Review the configuration above. Would you like to proceed with installation?" "Y"; then
+    echo "Setup cancelled. No changes were made."
+    exit 0
+fi
+
 # Create backup directory
-BACKUP_DIR="/opt/hakpak/backups/$(date +%Y%m%d%H%M%S)"
+BACKUP_DIR="$INSTALL_DIR/backups/$(date +%Y%m%d%H%M%S)"
 mkdir -p $BACKUP_DIR
+
+# Begin actual installation
+echo
+echo -e "${BLUE}========================================${NC}"
+echo -e "${BLUE}   Starting Installation              ${NC}"
+echo -e "${BLUE}========================================${NC}"
+
+# Confirm one last time before making changes
+if ! confirm "This will modify system files. Are you sure you want to continue?" "Y"; then
+    echo "Setup cancelled. No changes were made."
+    exit 0
+fi
 
 # Check for required packages
 status "Checking required packages..."
@@ -64,49 +321,6 @@ for pkg in $PACKAGES; do
     fi
 done
 success "All required packages are installed"
-
-# Detect wireless interfaces
-status "Detecting wireless interfaces..."
-WIFI_INTERFACES=($(iw dev | grep Interface | awk '{print $2}'))
-
-if [ ${#WIFI_INTERFACES[@]} -eq 0 ]; then
-    error "No wireless interfaces found. Please check your hardware."
-fi
-
-# Select wireless interface for AP
-if [ ${#WIFI_INTERFACES[@]} -gt 1 ]; then
-    status "Multiple wireless interfaces found:"
-    for i in "${!WIFI_INTERFACES[@]}"; do
-        echo "$i: ${WIFI_INTERFACES[$i]}"
-    done
-    
-    AP_INTERFACE=${WIFI_INTERFACES[0]}
-    status "Using ${AP_INTERFACE} for Access Point mode. To use a different interface, edit hostapd.conf manually."
-else
-    AP_INTERFACE=${WIFI_INTERFACES[0]}
-    status "Using ${AP_INTERFACE} for Access Point mode"
-fi
-
-# Identify primary network interface for internet connection
-status "Identifying primary network interface..."
-if ip a | grep -q "eth0"; then
-    PRIMARY_IFACE="eth0"
-    success "Found Ethernet interface: eth0"
-else
-    # Look for the interface that has an IP (likely what SSH is using)
-    SSH_IFACE=$(ip -o -4 route get 8.8.8.8 2>/dev/null | awk '{print $5}')
-    
-    # If SSH interface is the same as AP interface, warn user
-    if [[ "$SSH_IFACE" == "$AP_INTERFACE" ]]; then
-        warning "You appear to be using $AP_INTERFACE for network connectivity."
-        warning "Setting up the access point may disconnect your SSH session."
-        warning "If disconnected, connect to the 'hakpak' WiFi network with password 'pentestallthethings'"
-        warning "and access the Pi at 192.168.4.1"
-    else
-        PRIMARY_IFACE="$SSH_IFACE"
-        success "Using interface $PRIMARY_IFACE for internet connectivity"
-    fi
-fi
 
 # Stop network services
 status "Stopping network services..."
@@ -159,10 +373,10 @@ cat > /etc/hostapd/hostapd.conf << EOF
 # Basic configuration
 interface=${AP_INTERFACE}
 driver=nl80211
-ssid=hakpak
+ssid=${SSID}
 hw_mode=g
-channel=6
-country_code=US
+channel=${CHANNEL}
+country_code=${COUNTRY_CODE}
 
 # 802.11n support
 ieee80211n=1
@@ -171,7 +385,7 @@ ht_capab=[HT40][SHORT-GI-20][DSSS_CCK-40]
 # Security settings
 auth_algs=1
 wpa=2
-wpa_passphrase=pentestallthethings
+wpa_passphrase=${WIFI_PASSWORD}
 wpa_key_mgmt=WPA-PSK
 wpa_pairwise=CCMP
 rsn_pairwise=CCMP
@@ -199,6 +413,9 @@ EOF
 
 success "Hostapd configured"
 
+# Extract network from IP address
+IP_NETWORK=$(echo $IP_ADDRESS | cut -d. -f1-3)
+
 # Configure dnsmasq
 status "Configuring dnsmasq..."
 cat > /etc/dnsmasq.conf << EOF
@@ -209,21 +426,21 @@ except-interface=lo
 no-dhcp-interface=lo
 
 # DHCP range and lease time
-dhcp-range=192.168.4.2,192.168.4.100,255.255.255.0,24h
+dhcp-range=${DHCP_RANGE_START},${DHCP_RANGE_END},255.255.255.0,24h
 
 # Default gateway and DNS servers
-dhcp-option=option:router,192.168.4.1
-dhcp-option=option:dns-server,192.168.4.1
+dhcp-option=option:router,${IP_ADDRESS}
+dhcp-option=option:dns-server,${IP_ADDRESS}
 dhcp-option=option:netmask,255.255.255.0
 
 # Domain name
-domain=hakpak.local
+domain=${HOSTNAME}.local
 expand-hosts
-local=/hakpak.local/
-address=/hakpak.local/192.168.4.1
+local=/${HOSTNAME}.local/
+address=/${HOSTNAME}.local/${IP_ADDRESS}
 
 # Listen only on specific addresses
-listen-address=127.0.0.1,192.168.4.1
+listen-address=127.0.0.1,${IP_ADDRESS}
 
 # DNS options
 domain-needed
@@ -232,8 +449,17 @@ no-resolv
 no-poll
 
 # External DNS servers
-server=8.8.8.8
-server=8.8.4.4
+EOF
+
+if [ "$USE_CUSTOM_DNS" = true ]; then
+    echo "server=${DNS1}" >> /etc/dnsmasq.conf
+    echo "server=${DNS2}" >> /etc/dnsmasq.conf
+else
+    echo "server=8.8.8.8" >> /etc/dnsmasq.conf
+    echo "server=8.8.4.4" >> /etc/dnsmasq.conf
+fi
+
+cat >> /etc/dnsmasq.conf << EOF
 
 # DHCP options
 dhcp-authoritative
@@ -253,7 +479,7 @@ server {
     listen 80 default_server;
     listen [::]:80 default_server;
     
-    root /var/www/hakpak/public;
+    root ${INSTALL_DIR}/public;
     index index.html;
     
     server_name _;
@@ -270,8 +496,8 @@ server {
 EOF
 
 # Create public directory
-mkdir -p /var/www/hakpak/public
-echo "<html><body><h1>HakPak</h1><p>If you see this page, Nginx is running but the HakPak application is not.</p></body></html>" > /var/www/hakpak/public/index.html
+mkdir -p ${INSTALL_DIR}/public
+echo "<html><body><h1>HakPak</h1><p>If you see this page, Nginx is running but the HakPak application is not.</p></body></html>" > ${INSTALL_DIR}/public/index.html
 
 # Enable Nginx site
 mkdir -p /etc/nginx/sites-enabled/
@@ -282,11 +508,11 @@ rm -f /etc/nginx/sites-enabled/default
 status "Setting up ${AP_INTERFACE} interface..."
 rfkill unblock wifi
 ip addr flush dev ${AP_INTERFACE} 2>/dev/null || true
-ip addr add 192.168.4.1/24 dev ${AP_INTERFACE}
+ip addr add ${IP_ADDRESS}/24 dev ${AP_INTERFACE}
 ip link set ${AP_INTERFACE} up
 
-# Set up IP forwarding and NAT if we have a primary interface
-if [ ! -z "$PRIMARY_IFACE" ] && [ "$PRIMARY_IFACE" != "$AP_INTERFACE" ]; then
+# Set up IP forwarding and NAT if requested
+if [ "$ENABLE_INTERNET_SHARING" = true ] && [ -n "$INTERNET_IFACE" ] && [ "$INTERNET_IFACE" != "$AP_INTERFACE" ]; then
     status "Setting up IP forwarding and NAT for internet sharing..."
     echo 1 > /proc/sys/net/ipv4/ip_forward
     
@@ -297,10 +523,10 @@ if [ ! -z "$PRIMARY_IFACE" ] && [ "$PRIMARY_IFACE" != "$AP_INTERFACE" ]; then
     
     # Set up NAT rules
     iptables -t nat -F
-    iptables -t nat -A POSTROUTING -o $PRIMARY_IFACE -j MASQUERADE
+    iptables -t nat -A POSTROUTING -o $INTERNET_IFACE -j MASQUERADE
     iptables -F
-    iptables -A FORWARD -i $PRIMARY_IFACE -o ${AP_INTERFACE} -m state --state RELATED,ESTABLISHED -j ACCEPT
-    iptables -A FORWARD -i ${AP_INTERFACE} -o $PRIMARY_IFACE -j ACCEPT
+    iptables -A FORWARD -i $INTERNET_IFACE -o ${AP_INTERFACE} -m state --state RELATED,ESTABLISHED -j ACCEPT
+    iptables -A FORWARD -i ${AP_INTERFACE} -o $INTERNET_IFACE -j ACCEPT
     
     # Make iptables rules persistent
     if command -v iptables-save >/dev/null 2>&1; then
@@ -328,36 +554,59 @@ EOF
     
     success "IP forwarding and NAT configured"
 else
-    status "No separate interface found for internet sharing."
-    status "HakPak will operate in standalone mode."
+    status "Internet sharing not configured. HakPak will operate in standalone mode."
 fi
 
 # Set up HakPak application
 status "Setting up HakPak application..."
 
 # Create HakPak directories
-mkdir -p /opt/hakpak
-mkdir -p /opt/hakpak/data
-mkdir -p /opt/hakpak/logs
+mkdir -p ${INSTALL_DIR}
+mkdir -p ${INSTALL_DIR}/data
+mkdir -p ${INSTALL_DIR}/logs
 
 # Set up Python environment if it doesn't exist
-if [ ! -d "/opt/hakpak/venv" ]; then
+if [ ! -d "${INSTALL_DIR}/venv" ]; then
     status "Creating Python virtual environment..."
-    python3 -m venv /opt/hakpak/venv
+    python3 -m venv ${INSTALL_DIR}/venv
 fi
 
 # Copy application files
 status "Copying application files..."
-cp -r ./* /opt/hakpak/ 2>/dev/null || true
+cp -r ./* ${INSTALL_DIR}/ 2>/dev/null || true
+
+# Create hakpak.conf with user settings
+status "Creating configuration file..."
+mkdir -p ${INSTALL_DIR}/config
+cat > ${INSTALL_DIR}/config/hakpak.conf << EOF
+# HakPak Configuration
+# Generated by setup script
+
+[General]
+hostname = ${HOSTNAME}
+admin_password = ${ADMIN_PASSWORD}
+data_dir = ${INSTALL_DIR}/data
+log_dir = ${INSTALL_DIR}/logs
+
+[Network]
+ap_interface = ${AP_INTERFACE}
+ip_address = ${IP_ADDRESS}
+ssid = ${SSID}
+internet_sharing = ${ENABLE_INTERNET_SHARING}
+internet_interface = ${INTERNET_IFACE}
+
+[Flipper]
+auto_detect = true
+EOF
 
 # Install Python dependencies
 status "Installing Python dependencies..."
-/opt/hakpak/venv/bin/pip install --upgrade pip
-if [ -f "/opt/hakpak/requirements.txt" ]; then
-    /opt/hakpak/venv/bin/pip install -r /opt/hakpak/requirements.txt
+${INSTALL_DIR}/venv/bin/pip install --upgrade pip
+if [ -f "${INSTALL_DIR}/requirements.txt" ]; then
+    ${INSTALL_DIR}/venv/bin/pip install -r ${INSTALL_DIR}/requirements.txt
 else
-    warning "requirements.txt not found. Python dependencies may be incomplete."
-    /opt/hakpak/venv/bin/pip install Flask Flask-SocketIO gunicorn eventlet pyserial RPi.GPIO gpiozero python-dotenv requests
+    warning "requirements.txt not found. Installing basic Python dependencies..."
+    ${INSTALL_DIR}/venv/bin/pip install Flask Flask-SocketIO gunicorn eventlet pyserial RPi.GPIO gpiozero python-dotenv requests
 fi
 
 # Set up Flipper Zero udev rules
@@ -380,13 +629,14 @@ After=network.target
 Wants=hostapd.service dnsmasq.service
 
 [Service]
-ExecStart=/opt/hakpak/venv/bin/gunicorn --worker-class eventlet -w 1 --bind 127.0.0.1:5000 app:app
-WorkingDirectory=/opt/hakpak
+ExecStart=${INSTALL_DIR}/venv/bin/gunicorn --worker-class eventlet -w 1 --bind 127.0.0.1:5000 app:app
+WorkingDirectory=${INSTALL_DIR}
 User=root
 Group=root
 Restart=always
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
+Environment=HAKPAK_CONFIG=${INSTALL_DIR}/config/hakpak.conf
 
 [Install]
 WantedBy=multi-user.target
@@ -394,9 +644,9 @@ EOF
 
 # Set appropriate permissions
 status "Setting permissions..."
-chown -R root:root /opt/hakpak
-chmod -R 755 /opt/hakpak
-find /opt/hakpak/scripts -type f -name "*.sh" -exec chmod +x {} \;
+chown -R root:root ${INSTALL_DIR}
+chmod -R 755 ${INSTALL_DIR}
+find ${INSTALL_DIR}/scripts -type f -name "*.sh" -exec chmod +x {} \; 2>/dev/null || true
 
 # Start services in the correct order
 status "Starting network services..."
@@ -445,10 +695,10 @@ if ! systemctl is-active dnsmasq >/dev/null 2>&1; then
 # Simpler configuration
 interface=${AP_INTERFACE}
 bind-interfaces
-dhcp-range=192.168.4.2,192.168.4.100,255.255.255.0,24h
-dhcp-option=option:router,192.168.4.1
+dhcp-range=${DHCP_RANGE_START},${DHCP_RANGE_END},255.255.255.0,24h
+dhcp-option=option:router,${IP_ADDRESS}
 dhcp-option=option:dns-server,8.8.8.8,8.8.4.4
-listen-address=127.0.0.1,192.168.4.1
+listen-address=127.0.0.1,${IP_ADDRESS}
 no-resolv
 server=8.8.8.8
 server=8.8.4.4
@@ -501,9 +751,11 @@ fi
 echo -e "${GREEN}========================================${NC}"
 echo -e "${GREEN}   HakPak Setup Complete!              ${NC}"
 echo -e "${GREEN}========================================${NC}"
-echo -e "SSID: ${YELLOW}hakpak${NC}"
-echo -e "Password: ${YELLOW}pentestallthethings${NC}"
-echo -e "Access the web interface at ${YELLOW}http://192.168.4.1${NC}"
+echo -e "SSID: ${YELLOW}${SSID}${NC}"
+echo -e "Password: ${YELLOW}${WIFI_PASSWORD}${NC}"
+echo -e "Access the web interface at ${YELLOW}http://${IP_ADDRESS}${NC}"
+echo -e "Admin user: ${YELLOW}admin${NC}"
+echo -e "Admin password: ${YELLOW}${ADMIN_PASSWORD}${NC}"
 echo
 echo -e "If you don't see the WiFi network, try rebooting:"
 echo -e "${YELLOW}sudo reboot${NC}"
@@ -512,7 +764,7 @@ echo -e "To check the system status after reboot, run:"
 echo -e "${YELLOW}sudo systemctl status hostapd dnsmasq nginx hakpak${NC}"
 echo
 echo -e "To troubleshoot issues, run the health check script:"
-echo -e "${YELLOW}sudo ./scripts/health_check.sh${NC}"
+echo -e "${YELLOW}${INSTALL_DIR}/scripts/health_check.sh${NC}"
 echo
 echo -e "${GREEN}========================================${NC}"
 
