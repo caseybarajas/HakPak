@@ -1,4 +1,4 @@
-# 🔐 HakPak: Portable Pentesting Platform
+# 🔐 HakPak: Portable Pentesting Platform (HEAVY WIP)
 
 [![Kali Linux](https://img.shields.io/badge/Kali-268BEE?style=for-the-badge&logo=kalilinux&logoColor=white)](https://www.kali.org/)
 [![Raspberry Pi](https://img.shields.io/badge/Raspberry%20Pi-C51A4A?style=for-the-badge&logo=Raspberry-Pi)](https://www.raspberrypi.org/)
