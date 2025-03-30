@@ -21,6 +21,8 @@ Designed for security professionals and ethical hackers, HakPak provides a compr
 - **Modular Architecture**: Expandable with additional sensors and hardware
 - **Real-time System Monitoring**: View battery, CPU, memory, and temperature stats
 - **Integrated Tool Management**: Launch and control common Kali tools directly from the web interface
+- **Automatic WiFi access point configuration**
+- **Support for creating burnable ISO images**
 
 ## 🧰 Components
 
@@ -111,6 +113,26 @@ sudo systemctl start hakpak
 ```
 
 See the [detailed installation guide](docs/installation.md) for complete manual installation instructions.
+
+### Option 2: Pre-built ISO Image
+
+You can create a custom ISO image with HakPak pre-installed:
+
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/yourusername/hakpak.git
+   cd hakpak
+   ```
+
+2. Build the ISO image:
+   ```bash
+   chmod +x scripts/build_iso.sh
+   sudo ./scripts/build_iso.sh
+   ```
+
+3. Flash the resulting image to an SD card.
+
+See [ISO Creation Guide](docs/iso_creation.md) for detailed instructions.
 
 ## 🚀 Usage
 
@@ -211,3 +233,13 @@ HakPak is designed for legitimate security testing and educational purposes only
 **Made with ❤️ by Casey Barajas, for security enthusiasts**
 
 [GitHub](https://github.com/caseybarajas/hakpak)
+
+## 📚 Documentation
+
+- [Configuration Guide](docs/configuration.md)
+- [Development Guide](docs/development.md)
+- [ISO Creation Guide](docs/iso_creation.md)
+
+## 🤝 Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
