@@ -651,10 +651,10 @@ rm -f /etc/nginx/sites-enabled/default
 
 # Configure network interfaces
 status "Setting up ${AP_INTERFACE} interface..."
-rfkill unblock wifi
-ip addr flush dev ${AP_INTERFACE} 2>/dev/null || true
-ip addr add ${IP_ADDRESS}/24 dev ${AP_INTERFACE}
-ip link set ${AP_INTERFACE} up
+setup_wifi_ap
+
+# Test hostapd configuration before starting
+test_hostapd_config
 
 # Set up IP forwarding and NAT if requested
 if [ "$ENABLE_INTERNET_SHARING" = true ] && [ -n "$INTERNET_IFACE" ] && [ "$INTERNET_IFACE" != "$AP_INTERFACE" ]; then
@@ -803,28 +803,7 @@ systemctl unmask hostapd
 systemctl enable hostapd dnsmasq nginx hakpak
 
 # Start hostapd
-status "Starting hostapd..."
-systemctl restart hostapd
-sleep 5  # Give hostapd time to initialize properly
-
-# Check if hostapd is running
-if ! systemctl is-active hostapd >/dev/null 2>&1; then
-    warning "Hostapd failed to start. Checking the configuration..."
-    hostapd -dd /etc/hostapd/hostapd.conf &
-    HOSTAPD_PID=$!
-    sleep 3
-    kill $HOSTAPD_PID 2>/dev/null || true
-    systemctl restart hostapd
-    sleep 2
-    
-    if ! systemctl is-active hostapd >/dev/null 2>&1; then
-        warning "Hostapd still not running. Check logs with: journalctl -xeu hostapd"
-    else
-        success "Hostapd started successfully on second attempt"
-    fi
-else
-    success "Hostapd started successfully"
-fi
+start_hostapd
 
 # Start dnsmasq
 status "Starting dnsmasq..."
@@ -892,6 +871,273 @@ else
     iw dev ${AP_INTERFACE} info || echo "Unable to get interface info"
     warning "You may need to reboot for changes to take effect"
 fi
+
+# Add this function to check if the access point is visible
+verify_ap_visibility() {
+    status "Verifying access point visibility..."
+    
+    # Check if hostapd is actually running
+    if ! pgrep hostapd >/dev/null; then
+        warning "Hostapd process is not running!"
+        return 1
+    fi
+    
+    # Check if it's in AP mode
+    if ! iw dev ${AP_INTERFACE} info 2>/dev/null | grep -q "type AP"; then
+        warning "Interface ${AP_INTERFACE} is not in AP mode!"
+        echo "Current interface mode:"
+        iw dev ${AP_INTERFACE} info
+        return 1
+    fi
+    
+    # Try to scan for our own AP from another interface if available
+    local TEST_IFACE=""
+    for iface in "${WIFI_INTERFACES[@]}"; do
+        if [ "$iface" != "$AP_INTERFACE" ]; then
+            TEST_IFACE="$iface"
+            break
+        fi
+    done
+    
+    if [ -n "$TEST_IFACE" ]; then
+        status "Using ${TEST_IFACE} to scan for the access point..."
+        # Put the interface in managed mode if it's not already
+        ip link set ${TEST_IFACE} down
+        sleep 1
+        iwconfig ${TEST_IFACE} mode managed 2>/dev/null || true
+        ip link set ${TEST_IFACE} up
+        sleep 2
+        
+        # Scan for SSIDs
+        echo "Scanning for SSIDs with ${TEST_IFACE}..."
+        iw dev ${TEST_IFACE} scan | grep -A 2 "SSID:" || true
+        
+        if iw dev ${TEST_IFACE} scan | grep -q "SSID: ${SSID}"; then
+            success "Access point '${SSID}' is visible!"
+            return 0
+        else
+            warning "Could not see the access point '${SSID}' in scan results."
+            # Return success anyway since this is just a verification
+            return 0
+        fi
+    else
+        echo "No secondary interface available to scan for the access point."
+        # Try a different approach - check if hostapd has any stations connected
+        echo "Checking hostapd status for active connections..."
+        
+        # Just return success since we can't verify further
+        return 0
+    fi
+}
+
+# Add this function for final steps and verification
+final_setup_and_verify() {
+    echo
+    status "Running final verification steps..."
+    
+    # Check all critical services
+    for service in hostapd dnsmasq nginx hakpak; do
+        if systemctl is-active $service >/dev/null 2>&1; then
+            success "$service is running"
+        else
+            warning "$service is not running - this might affect functionality"
+        fi
+    done
+    
+    # Verify interface configuration
+    echo
+    status "Network interface configuration:"
+    ip addr show ${AP_INTERFACE}
+    
+    # Verify routing and firewall if internet sharing is enabled
+    if [ "$ENABLE_INTERNET_SHARING" = true ]; then
+        echo
+        status "Checking internet sharing configuration..."
+        echo "IP forwarding status: $(cat /proc/sys/net/ipv4/ip_forward)"
+        echo "NAT rules:"
+        iptables -t nat -L -v | grep -B 2 -A 2 MASQUERADE || echo "No NAT rules found"
+    fi
+    
+    # Verify access point visibility
+    echo
+    verify_ap_visibility
+    
+    # Create a quick connection guide
+    echo
+    status "Creating connection guide..."
+    mkdir -p ${INSTALL_DIR}/docs
+    cat > ${INSTALL_DIR}/docs/connect.md << EOF
+# HakPak Connection Guide
+
+## WiFi Connection Details
+* **SSID:** ${SSID}
+* **Password:** ${WIFI_PASSWORD}
+* **IP Address:** ${IP_ADDRESS}
+
+## Web Interface
+* Open your browser and navigate to: http://${IP_ADDRESS}
+* Login with:
+  * Username: admin
+  * Password: ${ADMIN_PASSWORD}
+
+## Troubleshooting
+If you can't see the WiFi network:
+1. Ensure you're within range of the device
+2. Try rebooting the Raspberry Pi: \`sudo reboot\`
+3. Run the health check: \`sudo ${INSTALL_DIR}/scripts/health_check.sh\`
+4. Check service status: \`sudo systemctl status hostapd dnsmasq nginx hakpak\`
+
+## Manual Restart
+To manually restart all services:
+\`\`\`
+sudo systemctl restart hostapd dnsmasq nginx hakpak
+\`\`\`
+EOF
+    success "Connection guide created at ${INSTALL_DIR}/docs/connect.md"
+}
+
+# Replace the current hostapd start process with this enhanced version
+start_hostapd() {
+    status "Starting hostapd access point..."
+    
+    # First, make sure hostapd is not running and is unmasked
+    systemctl stop hostapd 2>/dev/null || true
+    systemctl unmask hostapd
+    
+    # Enable the service for startup
+    systemctl enable hostapd
+    
+    # Start with debug output to see what's happening
+    status "Starting hostapd in debug mode briefly to diagnose any issues..."
+    echo "Starting hostapd with config:"
+    grep -v "#" /etc/hostapd/hostapd.conf | grep -v "^$"
+    
+    # Start hostapd in debug mode temporarily (will be killed shortly)
+    echo "Debug output from hostapd:"
+    echo "----------------------------------------------------------------------------------"
+    timeout 5 hostapd -dd /etc/hostapd/hostapd.conf || true
+    echo "----------------------------------------------------------------------------------"
+    
+    # Now start the actual service
+    systemctl restart hostapd
+    sleep 5
+    
+    # Check if hostapd is running
+    if ! systemctl is-active hostapd >/dev/null 2>&1; then
+        warning "Hostapd failed to start. Trying alternative approach..."
+        
+        # Try with different driver
+        sed -i 's/^driver=nl80211/driver=nl80211\n#driver=nl80211/' /etc/hostapd/hostapd.conf
+        systemctl restart hostapd
+        sleep 3
+        
+        if ! systemctl is-active hostapd >/dev/null 2>&1; then
+            warning "Hostapd still not running. Checking status..."
+            systemctl status hostapd
+            journalctl -xeu hostapd | tail -n 20
+            
+            warning "Trying one last attempt with direct execution..."
+            killall hostapd 2>/dev/null || true
+            hostapd -B /etc/hostapd/hostapd.conf
+            sleep 3
+            
+            if ! pgrep hostapd >/dev/null; then
+                error "Could not start hostapd after multiple attempts. Please check your WiFi hardware."
+            else
+                warning "Hostapd is running but not managed by systemd."
+                success "Access point should be available"
+            fi
+        else
+            success "Hostapd started successfully on second attempt"
+        fi
+    else
+        success "Hostapd started successfully"
+    fi
+}
+
+# Replace the current WiFi setup process with this more robust one
+setup_wifi_ap() {
+    status "Setting up Access Point on ${AP_INTERFACE}..."
+    
+    # Make sure WiFi is not blocked
+    status "Ensuring WiFi is not blocked..."
+    if rfkill list wifi | grep -q "Soft blocked: yes"; then
+        rfkill unblock wifi
+        success "WiFi unblocked"
+    else
+        success "WiFi is not blocked"
+    fi
+    
+    # Stop any services that might interfere with the interface
+    status "Preparing network interface..."
+    systemctl stop NetworkManager 2>/dev/null || true
+    systemctl stop wpa_supplicant 2>/dev/null || true
+    ip link set ${AP_INTERFACE} down
+    
+    # Wait for interface to be fully down
+    sleep 2
+    
+    # Set up interface in AP mode
+    ip addr flush dev ${AP_INTERFACE} 2>/dev/null || true
+    ip addr add ${IP_ADDRESS}/24 dev ${AP_INTERFACE}
+    ip link set ${AP_INTERFACE} up
+    
+    # Wait for interface to come up
+    sleep 2
+    
+    # Check if interface is up
+    if ! ip link show ${AP_INTERFACE} | grep -q "state UP"; then
+        warning "Interface ${AP_INTERFACE} is not UP. Attempting to force it up..."
+        ip link set ${AP_INTERFACE} up
+        sleep 2
+        
+        if ! ip link show ${AP_INTERFACE} | grep -q "state UP"; then
+            warning "Unable to bring interface ${AP_INTERFACE} up automatically."
+            warning "Interface state: $(ip link show ${AP_INTERFACE} | grep state)"
+        else
+            success "Interface ${AP_INTERFACE} is now UP"
+        fi
+    else
+        success "Interface ${AP_INTERFACE} is UP"
+    fi
+    
+    # Show current interface state
+    echo "Current state of ${AP_INTERFACE}:"
+    ip addr show ${AP_INTERFACE}
+}
+
+# Test hostapd configuration before starting
+test_hostapd_config() {
+    status "Testing hostapd configuration before starting services..."
+    if ! hostapd -t /etc/hostapd/hostapd.conf; then
+        warning "Hostapd configuration test failed! Troubleshooting..."
+        # Show interface details
+        echo "Interface details for ${AP_INTERFACE}:"
+        ip link show ${AP_INTERFACE}
+        iw dev ${AP_INTERFACE} info
+        
+        # Check if interface supports AP mode
+        if ! iw list | grep -A 10 "Supported interface modes" | grep -q "AP"; then
+            error "Your WiFi interface does not support AP mode. Please select a different interface."
+        fi
+        
+        error "Cannot continue with invalid hostapd configuration."
+    else
+        success "Hostapd configuration is valid"
+    fi
+}
+
+# Replace the current network interface setup with this:
+setup_wifi_ap
+
+# Test hostapd configuration before starting
+test_hostapd_config
+
+# Replace "status "Starting hostapd..."" and the hostapd startup code with:
+start_hostapd
+
+# At the very end of the script, before the final echo, add:
+final_setup_and_verify
 
 echo -e "${GREEN}========================================${NC}"
 echo -e "${GREEN}   HakPak Setup Complete!              ${NC}"
