@@ -123,13 +123,181 @@ check_command() {
     fi
 }
 
-# Detect wireless interfaces
-status "Scanning for wireless interfaces..."
-WIFI_INTERFACES=($(iw dev | grep Interface | awk '{print $2}'))
+# Detect and display network interfaces with more detail
+scan_network_interfaces() {
+    status "Scanning all network interfaces..."
+    
+    # Get all interfaces
+    ALL_INTERFACES=($(ls /sys/class/net/ | grep -v "lo"))
+    if [ ${#ALL_INTERFACES[@]} -eq 0 ]; then
+        error "No network interfaces found. Please check your hardware."
+    fi
+    
+    echo "Available network interfaces:"
+    echo "----------------------------------------------------------------------------------"
+    printf "%-10s %-17s %-15s %-8s %-20s\n" "Interface" "MAC Address" "IP Address" "Type" "Status"
+    echo "----------------------------------------------------------------------------------"
+    
+    # Collect wireless interfaces
+    WIFI_INTERFACES=()
+    ETHERNET_INTERFACES=()
+    
+    for iface in "${ALL_INTERFACES[@]}"; do
+        # Get IP address
+        IP_ADDR=$(ip -4 addr show $iface 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -n 1)
+        if [ -z "$IP_ADDR" ]; then
+            IP_ADDR="Not assigned"
+        fi
+        
+        # Get MAC address
+        MAC_ADDR=$(ip link show $iface | grep -oP '(?<=link/ether\s)[0-9a-f:]{17}' | head -n 1)
+        if [ -z "$MAC_ADDR" ]; then
+            MAC_ADDR="Unknown"
+        fi
+        
+        # Check if interface is up
+        if ip link show $iface | grep -q "state UP"; then
+            STATUS="UP"
+        else
+            STATUS="DOWN"
+        fi
+        
+        # Check if it's a wireless interface
+        if [ -d "/sys/class/net/$iface/wireless" ] || [ -d "/sys/class/net/$iface/phy80211" ]; then
+            TYPE="Wireless"
+            WIFI_INTERFACES+=("$iface")
+            
+            # Get additional wireless info if available
+            if command -v iwconfig >/dev/null 2>&1; then
+                WIFI_INFO=$(iwconfig $iface 2>/dev/null | grep -oP 'Mode:\S+')
+                if [ ! -z "$WIFI_INFO" ]; then
+                    STATUS="$STATUS ($WIFI_INFO)"
+                fi
+            fi
+        else
+            TYPE="Ethernet"
+            ETHERNET_INTERFACES+=("$iface")
+        fi
+        
+        printf "%-10s %-17s %-15s %-8s %-20s\n" "$iface" "$MAC_ADDR" "$IP_ADDR" "$TYPE" "$STATUS"
+    done
+    echo "----------------------------------------------------------------------------------"
+}
 
-if [ ${#WIFI_INTERFACES[@]} -eq 0 ]; then
-    error "No wireless interfaces found. Please check your hardware."
-fi
+# Enhanced selection for WiFi interface with more info
+select_wifi_interface() {
+    if [ ${#WIFI_INTERFACES[@]} -eq 0 ]; then
+        error "No wireless interfaces found. HakPak requires at least one wireless interface."
+    elif [ ${#WIFI_INTERFACES[@]} -eq 1 ]; then
+        AP_INTERFACE=${WIFI_INTERFACES[0]}
+        success "Using ${AP_INTERFACE} for Access Point mode (only wireless interface available)"
+    else
+        echo
+        echo "Multiple wireless interfaces detected. Please select one for the access point:"
+        echo "----------------------------------------------------------------------------------"
+        printf "%-5s %-10s %-30s\n" "No." "Interface" "Details"
+        echo "----------------------------------------------------------------------------------"
+        
+        for i in "${!WIFI_INTERFACES[@]}"; do
+            iface=${WIFI_INTERFACES[$i]}
+            # Get additional details
+            if command -v iw >/dev/null 2>&1; then
+                DETAILS=$(iw dev $iface info 2>/dev/null | grep -E 'addr|ssid|type|channel' | tr '\n' ' ' | sed 's/addr/MAC/g')
+                if [ -z "$DETAILS" ]; then
+                    DETAILS="No additional info available"
+                fi
+            else
+                DETAILS="iw command not available for detailed info"
+            fi
+            
+            printf "%-5s %-10s %-30s\n" "$((i+1))" "$iface" "$DETAILS"
+        done
+        echo "----------------------------------------------------------------------------------"
+        
+        select_option "Which wireless interface should be used for the HakPak access point?" "${WIFI_INTERFACES[@]}"
+        AP_INTERFACE_INDEX=$?
+        AP_INTERFACE=${WIFI_INTERFACES[$AP_INTERFACE_INDEX]}
+    fi
+}
+
+# Enhanced selection for internet sharing interface
+select_internet_interface() {
+    # Filter out the AP interface from possible internet interfaces
+    INTERNET_CANDIDATES=()
+    for iface in "${ALL_INTERFACES[@]}"; do
+        if [ "$iface" != "$AP_INTERFACE" ]; then
+            INTERNET_CANDIDATES+=("$iface")
+        fi
+    done
+    
+    if [ ${#INTERNET_CANDIDATES[@]} -eq 0 ]; then
+        warning "No additional interfaces found for internet sharing."
+        ENABLE_INTERNET_SHARING=false
+        return
+    fi
+    
+    echo
+    echo "Select interface for internet connection sharing:"
+    echo "----------------------------------------------------------------------------------"
+    printf "%-5s %-10s %-30s\n" "No." "Interface" "Details"
+    echo "----------------------------------------------------------------------------------"
+    printf "%-5s %-10s %-30s\n" "0" "None" "Disable internet sharing"
+    
+    # Find currently connected interface
+    CONNECTED_IFACE=$(ip -o -4 route get 8.8.8.8 2>/dev/null | awk '{print $5}')
+    DEFAULT_INDEX=0
+    
+    for i in "${!INTERNET_CANDIDATES[@]}"; do
+        iface=${INTERNET_CANDIDATES[$i]}
+        # Get connection details
+        IP_ADDR=$(ip -4 addr show $iface 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -n 1)
+        if [ -z "$IP_ADDR" ]; then
+            IP_ADDR="No IP"
+        fi
+        
+        DETAILS="IP: $IP_ADDR"
+        
+        # Check if this interface has Internet connectivity
+        if [ "$iface" = "$CONNECTED_IFACE" ]; then
+            DETAILS="$DETAILS (Currently connected to Internet)"
+            # Set this as default
+            DEFAULT_INDEX=$((i+1))
+        fi
+        
+        printf "%-5s %-10s %-30s\n" "$((i+1))" "$iface" "$DETAILS"
+    done
+    echo "----------------------------------------------------------------------------------"
+    
+    # Custom selection that includes "None" option
+    local valid=false
+    local choice
+    echo "Which interface should be used for internet sharing? [0-${#INTERNET_CANDIDATES[@]}] (default: $DEFAULT_INDEX): "
+    read choice
+    
+    # Use default if empty
+    if [ -z "$choice" ]; then
+        choice=$DEFAULT_INDEX
+    fi
+    
+    # Validate selection
+    if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 0 ] && [ "$choice" -le "${#INTERNET_CANDIDATES[@]}" ]; then
+        if [ "$choice" -eq 0 ]; then
+            ENABLE_INTERNET_SHARING=false
+            success "Internet sharing disabled"
+        else
+            INTERNET_IFACE=${INTERNET_CANDIDATES[$((choice-1))]}
+            ENABLE_INTERNET_SHARING=true
+            success "Internet sharing will use $INTERNET_IFACE"
+        fi
+    else
+        warning "Invalid selection. Internet sharing will be disabled."
+        ENABLE_INTERNET_SHARING=false
+    fi
+}
+
+# Detect and scan all network interfaces
+status "Scanning for network interfaces..."
+scan_network_interfaces
 
 # Welcome message
 echo
@@ -146,38 +314,10 @@ if ! confirm "Ready to begin setup?" "Y"; then
 fi
 
 echo
-status "Gathering system information..."
+status "Configuring network interfaces..."
 
-# Available wireless interfaces
-if [ ${#WIFI_INTERFACES[@]} -gt 1 ]; then
-    echo "Multiple wireless interfaces detected:"
-    for i in "${!WIFI_INTERFACES[@]}"; do
-        echo "  $((i+1))). ${WIFI_INTERFACES[$i]}"
-    done
-    
-    # Select wireless interface for AP
-    select_option "Which wireless interface should be used for the access point?" "${WIFI_INTERFACES[@]}"
-    AP_INTERFACE_INDEX=$?
-    AP_INTERFACE=${WIFI_INTERFACES[$AP_INTERFACE_INDEX]}
-else
-    AP_INTERFACE=${WIFI_INTERFACES[0]}
-    echo "Using ${AP_INTERFACE} for Access Point mode (only interface available)"
-fi
-
-# Identify primary network interface for internet connection
-if ip a | grep -q "eth0"; then
-    DEFAULT_INTERNET_IFACE="eth0"
-    echo "Ethernet interface (eth0) detected"
-else
-    # Look for the interface that has an IP (likely what SSH is using)
-    SSH_IFACE=$(ip -o -4 route get 8.8.8.8 2>/dev/null | awk '{print $5}')
-    if [ -n "$SSH_IFACE" ] && [ "$SSH_IFACE" != "$AP_INTERFACE" ]; then
-        DEFAULT_INTERNET_IFACE="$SSH_IFACE"
-        echo "Network interface $SSH_IFACE detected"
-    else
-        DEFAULT_INTERNET_IFACE=""
-    fi
-fi
+# Select WiFi interface for AP
+select_wifi_interface
 
 # Configuration variables - initialize with defaults
 SSID="hakpak"
@@ -213,8 +353,22 @@ done
 # Prompt for country code
 COUNTRY_CODE=$(prompt_string "WiFi country code (2-letter code)" "$COUNTRY_CODE")
 
-# Prompt for channel
-echo "Available WiFi channels: 1, 6, 11 (recommended for 2.4GHz)"
+# Scan available channels
+status "Scanning for available WiFi channels..."
+if command -v iwlist >/dev/null 2>&1; then
+    # Try to get available channels
+    CHANNEL_INFO=$(iwlist $AP_INTERFACE freq 2>/dev/null | grep -oP 'Channel \d+' | sort -u)
+    if [ ! -z "$CHANNEL_INFO" ]; then
+        echo "Available WiFi channels for $AP_INTERFACE:"
+        echo "$CHANNEL_INFO"
+        echo "Recommended: Channel 1, 6, or 11 for 2.4GHz to avoid interference"
+    else
+        echo "Couldn't detect available channels. Recommended: Channel 1, 6, or 11 for 2.4GHz"
+    fi
+else
+    echo "Available WiFi channels: 1, 6, 11 (recommended for 2.4GHz)"
+fi
+
 CHANNEL=$(prompt_string "WiFi channel" "$CHANNEL")
 
 # Prompt for IP address
@@ -232,26 +386,17 @@ echo -e "${BLUE}   Advanced Configuration             ${NC}"
 echo -e "${BLUE}========================================${NC}"
 
 # Prompt for internet sharing
-if confirm "Enable internet sharing/routing to connected devices?" "Y"; then
-    ENABLE_INTERNET_SHARING=true
-    
-    if [ -n "$DEFAULT_INTERNET_IFACE" ]; then
-        echo "Internet connection interface detected: $DEFAULT_INTERNET_IFACE"
-        INTERNET_IFACE="$DEFAULT_INTERNET_IFACE"
-    else
-        INTERNET_IFACE=$(prompt_string "Interface for internet connection" "")
-        if [ -z "$INTERNET_IFACE" ]; then
-            warning "No internet interface specified. Internet sharing will be disabled."
-            ENABLE_INTERNET_SHARING=false
-        fi
-    fi
-else
-    ENABLE_INTERNET_SHARING=false
+if confirm "Would you like to configure internet sharing?" "Y"; then
+    select_internet_interface
 fi
 
 # Prompt for custom DNS servers
 if confirm "Use custom DNS servers?" "N"; then
     USE_CUSTOM_DNS=true
+    echo "Some popular DNS servers:"
+    echo "  - Google: 8.8.8.8, 8.8.4.4"
+    echo "  - Cloudflare: 1.1.1.1, 1.0.0.1"
+    echo "  - OpenDNS: 208.67.222.222, 208.67.220.220"
     DNS1=$(prompt_string "Primary DNS server" "$DNS1")
     DNS2=$(prompt_string "Secondary DNS server" "$DNS2")
 else
@@ -285,7 +430,7 @@ fi
 if [ "$USE_CUSTOM_DNS" = true ]; then
     echo -e "Custom DNS: ${GREEN}Enabled${NC} (Primary: $DNS1, Secondary: $DNS2)"
 else
-    echo -e "Custom DNS: ${RED}Disabled${NC} (Using default)"
+    echo -e "Custom DNS: ${RED}Disabled${NC} (Using default Google DNS)"
 fi
 
 echo
