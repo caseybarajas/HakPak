@@ -62,33 +62,48 @@ class FlipperZero:
         """
         try:
             with self.lock:
-                self.serial = serial.Serial(
-                    port=self.port,
-                    baudrate=self.baudrate,
-                    timeout=self.timeout,
-                    bytesize=serial.EIGHTBITS,
-                    parity=serial.PARITY_NONE,
-                    stopbits=serial.STOPBITS_ONE
-                )
-                
-                # Flush any pending data
-                self.serial.reset_input_buffer()
-                self.serial.reset_output_buffer()
-                
-                # Try to get device info as a test
-                response = self.send_command("device_info")
-                if response:
-                    self.connected = True
-                    logger.info(f"Connected to Flipper Zero on {self.port}")
-                    return True
-                else:
-                    self.connected = False
-                    raise FlipperConnectionError("Failed to get device info")
+                self._open_serial_connection()
+                self._verify_connection()
+                logger.info(f"Connected to Flipper Zero on {self.port}")
+                return True
         except serial.SerialException as e:
+            self._handle_connection_error(e)
+            raise FlipperConnectionError(f"Could not connect to port {self.port}: {e}")
+        except FlipperConnectionError as e:
             self.connected = False
             self.last_error = str(e)
             logger.error(f"Failed to connect to Flipper Zero: {e}")
-            raise FlipperConnectionError(f"Could not connect to port {self.port}: {e}")
+            raise
+    
+    def _open_serial_connection(self):
+        """Open the serial connection to the Flipper Zero"""
+        self.serial = serial.Serial(
+            port=self.port,
+            baudrate=self.baudrate,
+            timeout=self.timeout,
+            bytesize=serial.EIGHTBITS,
+            parity=serial.PARITY_NONE,
+            stopbits=serial.STOPBITS_ONE
+        )
+        
+        # Flush any pending data
+        self.serial.reset_input_buffer()
+        self.serial.reset_output_buffer()
+    
+    def _verify_connection(self):
+        """Verify that the connection is working by sending a test command"""
+        response = self.send_command("device_info")
+        if response:
+            self.connected = True
+        else:
+            self.connected = False
+            raise FlipperConnectionError("Failed to get device info")
+    
+    def _handle_connection_error(self, exception):
+        """Handle a connection error"""
+        self.connected = False
+        self.last_error = str(exception)
+        logger.error(f"Failed to connect to Flipper Zero: {exception}")
     
     def disconnect(self):
         """
@@ -139,43 +154,51 @@ class FlipperZero:
         
         try:
             with self.lock:
-                # Prepare command
-                cmd = f"{command}\r\n".encode()
-                
-                # Send command
-                self.serial.write(cmd)
-                self.serial.flush()
-                
-                # Wait for response with timeout
-                start_time = time.time()
-                response = ""
-                
-                while time.time() - start_time < timeout:
-                    if self.serial.in_waiting:
-                        chunk = self.serial.readline().decode('utf-8', errors='ignore').strip()
-                        response += chunk + "\n"
-                        
-                        # Check if response is complete
-                        if chunk.lower().startswith("ok") or chunk.lower().startswith("error"):
-                            break
-                    
-                    time.sleep(0.1)
-                
-                if not response and time.time() - start_time >= timeout:
-                    raise FlipperTimeoutError(f"Command '{command}' timed out")
-                
-                self.last_response = response.strip()
-                
-                # Check for error response
-                if "error" in response.lower():
-                    raise FlipperCommandError(f"Command '{command}' failed: {response}")
-                
-                return self.last_response
+                self._write_command(command)
+                response = self._read_response(command, timeout)
+                return response
         except serial.SerialException as e:
-            self.connected = False
-            self.last_error = str(e)
-            logger.error(f"Serial communication error: {e}")
+            self._handle_serial_exception(e)
             raise FlipperConnectionError(f"Serial communication error: {e}")
+    
+    def _write_command(self, command):
+        """Write a command to the serial connection"""
+        cmd = f"{command}\r\n".encode()
+        self.serial.write(cmd)
+        self.serial.flush()
+    
+    def _read_response(self, command, timeout):
+        """Read the response from a command with timeout"""
+        start_time = time.time()
+        response = ""
+        
+        while time.time() - start_time < timeout:
+            if self.serial.in_waiting:
+                chunk = self.serial.readline().decode('utf-8', errors='ignore').strip()
+                response += chunk + "\n"
+                
+                # Check if response is complete
+                if chunk.lower().startswith("ok") or chunk.lower().startswith("error"):
+                    break
+            
+            time.sleep(0.1)
+        
+        if not response and time.time() - start_time >= timeout:
+            raise FlipperTimeoutError(f"Command '{command}' timed out")
+        
+        self.last_response = response.strip()
+        
+        # Check for error response
+        if "error" in response.lower():
+            raise FlipperCommandError(f"Command '{command}' failed: {response}")
+        
+        return self.last_response
+    
+    def _handle_serial_exception(self, exception):
+        """Handle a serial exception by marking the connection as closed"""
+        self.connected = False
+        self.last_error = str(exception)
+        logger.error(f"Serial communication error: {exception}")
     
     def get_firmware_version(self):
         """
@@ -185,6 +208,10 @@ class FlipperZero:
             str: Firmware version
         """
         response = self.send_command("device_info")
+        return self._parse_firmware_version(response)
+    
+    def _parse_firmware_version(self, response):
+        """Parse firmware version from device_info response"""
         for line in response.split("\n"):
             if "firmware:" in line.lower():
                 return line.split(":", 1)[1].strip()
@@ -198,68 +225,70 @@ class FlipperZero:
             int: Battery percentage (0-100)
         """
         response = self.send_command("power info")
-        for line in response.split("\n"):
-            if "charge:" in line.lower():
-                value = line.split(":", 1)[1].strip()
-                if "%" in value:
-                    return int(value.replace("%", ""))
-                return int(value)
-        return 0
+        return self._parse_battery_level(response)
+    
+    def _parse_battery_level(self, response):
+        """Parse battery level from power info response"""
+        try:
+            for line in response.split("\n"):
+                if "charge:" in line.lower():
+                    return int(line.split(":", 1)[1].strip().replace("%", ""))
+            return 0
+        except (ValueError, IndexError):
+            logger.error("Failed to parse battery level")
+            return 0
     
     def get_device_info(self):
         """
-        Get comprehensive device information
+        Get Flipper Zero device information
         
         Returns:
-            dict: Device info including firmware, hardware, battery, etc.
+            dict: Device information
         """
         response = self.send_command("device_info")
+        return self._parse_device_info(response)
+    
+    def _parse_device_info(self, response):
+        """Parse device information from device_info command"""
         info = {}
-        
         for line in response.split("\n"):
             if ":" in line:
                 key, value = line.split(":", 1)
                 info[key.strip().lower()] = value.strip()
-        
-        # Get battery info
-        try:
-            battery_response = self.send_command("power info")
-            for line in battery_response.split("\n"):
-                if ":" in line:
-                    key, value = line.split(":", 1)
-                    info[f"battery_{key.strip().lower()}"] = value.strip()
-        except:
-            pass
-            
         return info
     
     def run_app(self, app_name):
         """
-        Start an app on Flipper Zero
+        Run an application on Flipper Zero
         
         Args:
-            app_name (str): Name of the app to run
-            
-        Returns:
-            bool: True if app started successfully
-        """
-        try:
-            self.send_command(f"app_start {app_name}")
-            return True
-        except:
-            return False
-            
-    def exit_app(self):
-        """
-        Exit current app on Flipper Zero
+            app_name (str): Application name
         
         Returns:
-            bool: True if app exited successfully
+            bool: True if application started successfully
+        
+        Raises:
+            FlipperCommandError: If application fails to start
         """
         try:
-            self.send_command("app_exit")
-            return True
-        except:
+            response = self.send_command(f"app_start {app_name}")
+            return "started" in response.lower()
+        except FlipperCommandError as e:
+            logger.error(f"Failed to start app {app_name}: {e}")
+            raise
+    
+    def exit_app(self):
+        """
+        Exit current application on Flipper Zero
+        
+        Returns:
+            bool: True if exit successful
+        """
+        try:
+            response = self.send_command("app_exit")
+            return "exited" in response.lower()
+        except Exception as e:
+            logger.error(f"Failed to exit app: {e}")
             return False
     
     def restart(self):
@@ -270,8 +299,9 @@ class FlipperZero:
             bool: True if restart command sent successfully
         """
         try:
-            self.send_command("restart")
-            self.connected = False
+            self.send_command("reboot")
+            self.disconnect()
             return True
-        except:
+        except Exception as e:
+            logger.error(f"Failed to restart Flipper Zero: {e}")
             return False 

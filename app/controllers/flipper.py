@@ -10,36 +10,54 @@ bp = Blueprint('flipper', __name__, url_prefix='/flipper')
 
 # Flipper Zero instance (will be initialized on first access)
 _flipper_instance = None
+MAX_RETRY_ATTEMPTS = 3
 
 def get_flipper_instance():
-    """Get or create Flipper Zero instance"""
+    """
+    Get or create Flipper Zero instance
+    
+    Returns:
+        FlipperZero: Instance of FlipperZero class
+    """
     global _flipper_instance
     
     if _flipper_instance is None:
         try:
-            # Try to get port from config
-            config_file = '/etc/hakpak/flipper.conf'
-            if os.path.exists(config_file):
-                with open(config_file, 'r') as f:
-                    for line in f:
-                        if line.startswith('FLIPPER_PORT='):
-                            port = line.strip().split('=')[1].strip('"\'')
-                            break
-            else:
-                # Default port
-                port = '/dev/ttyACM0'
-                
-            # Create and connect flipper instance
+            port = _get_flipper_port()
             _flipper_instance = FlipperZero(port=port)
-            try:
-                _flipper_instance.connect()
-            except:
-                # Connection might fail, we'll retry later
-                pass
+            _try_connect_flipper()
         except Exception as e:
             print(f"Error initializing Flipper Zero: {e}")
     
     return _flipper_instance
+
+def _get_flipper_port():
+    """
+    Get Flipper Zero port from config or use default
+    
+    Returns:
+        str: Serial port path
+    """
+    config_file = '/etc/hakpak/flipper.conf'
+    if os.path.exists(config_file):
+        with open(config_file, 'r') as f:
+            for line in f:
+                if line.startswith('FLIPPER_PORT='):
+                    return line.strip().split('=')[1].strip('"\'')
+    
+    # Default port
+    return '/dev/ttyACM0'
+
+def _try_connect_flipper():
+    """Try to connect to Flipper Zero with error handling"""
+    global _flipper_instance
+    
+    if _flipper_instance is not None:
+        try:
+            _flipper_instance.connect()
+        except:
+            # Connection might fail, we'll retry later
+            pass
 
 @bp.route('/')
 def index():
@@ -57,21 +75,30 @@ def status():
         'port': flipper.port if connected else None,
     }
     
-    # Get firmware version if connected
     if connected:
         try:
-            response['firmware'] = flipper.get_firmware_version()
-            response['battery'] = flipper.get_battery_level()
-            
-            # Get other device info
-            device_info = flipper.get_device_info()
-            for key, value in device_info.items():
-                if key not in response:
-                    response[key] = value
-        except:
-            pass
+            _populate_device_info(flipper, response)
+        except Exception as e:
+            response['error'] = str(e)
     
     return jsonify(response)
+
+def _populate_device_info(flipper, response_dict):
+    """
+    Populate response dictionary with device information
+    
+    Args:
+        flipper (FlipperZero): Flipper Zero instance
+        response_dict (dict): Dictionary to populate with device info
+    """
+    response_dict['firmware'] = flipper.get_firmware_version()
+    response_dict['battery'] = flipper.get_battery_level()
+    
+    # Get other device info
+    device_info = flipper.get_device_info()
+    for key, value in device_info.items():
+        if key not in response_dict:
+            response_dict[key] = value
 
 @bp.route('/connect', methods=['POST'])
 def connect():
@@ -81,14 +108,8 @@ def connect():
     
     try:
         flipper = get_flipper_instance()
-        
-        # Update port if different
-        if flipper.port != port:
-            flipper.port = port
-        
-        # Try to connect
-        if not flipper.is_connected():
-            flipper.connect()
+        _update_flipper_port_if_needed(flipper, port)
+        _ensure_flipper_connected(flipper)
         
         return jsonify({
             'success': True,
@@ -100,6 +121,30 @@ def connect():
             'success': False,
             'message': f'Failed to connect to Flipper Zero: {str(e)}'
         })
+
+def _update_flipper_port_if_needed(flipper, port):
+    """
+    Update Flipper Zero port if different from current port
+    
+    Args:
+        flipper (FlipperZero): Flipper Zero instance
+        port (str): New port to use
+    """
+    if flipper.port != port:
+        flipper.port = port
+
+def _ensure_flipper_connected(flipper):
+    """
+    Ensure Flipper Zero is connected, connect if not
+    
+    Args:
+        flipper (FlipperZero): Flipper Zero instance
+    
+    Raises:
+        FlipperConnectionError: If connection fails
+    """
+    if not flipper.is_connected():
+        flipper.connect()
 
 @bp.route('/detach', methods=['POST'])
 def prepare_for_detachment():
@@ -127,15 +172,25 @@ def prepare_for_detachment():
             'message': 'Flipper Zero can now be safely detached'
         })
     except Exception as e:
-        socketio.emit('flipper_status', {
-            'status': 'error',
-            'message': f'Failed to prepare for detachment: {str(e)}'
-        })
+        error_message = f'Failed to prepare for detachment: {str(e)}'
+        _emit_error_status(error_message)
         
         return jsonify({
             'success': False,
-            'message': f'Failed to prepare for detachment: {str(e)}'
+            'message': error_message
         })
+
+def _emit_error_status(error_message):
+    """
+    Emit error status to clients
+    
+    Args:
+        error_message (str): Error message to emit
+    """
+    socketio.emit('flipper_status', {
+        'status': 'error',
+        'message': error_message
+    })
 
 @bp.route('/execute', methods=['POST'])
 def execute_command():
