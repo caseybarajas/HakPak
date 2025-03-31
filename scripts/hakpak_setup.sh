@@ -4,8 +4,27 @@
 # This script sets up HakPak with proper networking configuration
 # for any Raspberry Pi running Kali Linux
 
-# Clear the screen for a cleaner look
-clear
+# Debug mode can be enabled with DEBUG=1 environment variable
+# Example: DEBUG=1 ./hakpak_setup.sh
+DEBUG=${DEBUG:-0}
+
+# Debug function
+debug() {
+    if [ "$DEBUG" -eq 1 ]; then
+        echo -e "\033[0;33m[DEBUG] $1\033[0m" >&2
+    fi
+}
+
+# If debug mode is enabled, turn on bash debugging
+if [ "$DEBUG" -eq 1 ]; then
+    set -x
+    debug "Debug mode enabled"
+fi
+
+# Clear the screen for a cleaner look (skip in debug mode)
+if [ "$DEBUG" -ne 1 ]; then
+    clear
+fi
 
 set -e
 BLUE='\033[0;34m'
@@ -134,6 +153,7 @@ check_command() {
 
 # Function to select network mode
 select_network_mode() {
+    debug "Entering select_network_mode function"
     echo
     echo -e "${BLUE}========================================${NC}"
     echo -e "${BLUE}   Network Mode Selection             ${NC}"
@@ -155,28 +175,35 @@ select_network_mode() {
     # Prompt for network mode selection
     select_option "Select network mode:" "Access Point Mode (AP)" "Client Mode (Connect to existing WiFi)"
     local mode_choice=$?
+    debug "Network mode choice: $mode_choice"
     
     if [ $mode_choice -eq 0 ]; then
         NETWORK_MODE="AP"
         success "Selected Access Point Mode"
+        debug "Setting NETWORK_MODE=AP"
     else
         NETWORK_MODE="CLIENT"
         success "Selected Client Mode"
+        debug "Setting NETWORK_MODE=CLIENT"
         
         # Get WiFi details
         echo
         status "Please enter the details of your WiFi network:"
         CLIENT_SSID=$(prompt_string "WiFi network name (SSID)" "")
+        debug "CLIENT_SSID set to: $CLIENT_SSID"
         
         # Validate SSID
         while [ -z "$CLIENT_SSID" ]; do
             warning "WiFi SSID cannot be empty."
             CLIENT_SSID=$(prompt_string "WiFi network name (SSID)" "")
+            debug "CLIENT_SSID set to: $CLIENT_SSID (after validation)"
         done
         
         # Get password
         CLIENT_PASSWORD=$(prompt_string "WiFi password" "")
+        debug "CLIENT_PASSWORD set (length: ${#CLIENT_PASSWORD})"
     fi
+    debug "Exiting select_network_mode function"
 }
 
 # Function to test WiFi connection
@@ -198,12 +225,11 @@ test_wifi_connection() {
         # If AP_INTERFACE isn't set yet, use the first wireless interface
         if [ -z "$AP_INTERFACE" ] && [ ${#WIFI_INTERFACES[@]} -gt 0 ]; then
             test_iface="${WIFI_INTERFACES[0]}"
-        else if [ -n "$AP_INTERFACE" ]; then
+        elif [ -n "$AP_INTERFACE" ]; then
             test_iface="$AP_INTERFACE"
         else
             warning "No wireless interface available for testing. Skipping connection test."
             return 1
-        fi
         fi
     fi
     
@@ -233,17 +259,25 @@ network={
 }
 EOF
     
-    # Try to connect
+    # Try to connect (with more error handling)
     if ! wpa_supplicant -B -i $test_iface -c /tmp/wpa_temp.conf 2>/dev/null; then
         warning "Failed to start wpa_supplicant"
+        connected=false
     else
         sleep 3
-        dhclient -v $test_iface 2>/dev/null || true
-        sleep 2
-        
-        # Test connection
-        if ping -c 1 -W 5 8.8.8.8 >/dev/null 2>&1; then
-            connected=true
+        if ! dhclient -v $test_iface 2>/dev/null; then
+            warning "Failed to obtain IP address via DHCP"
+            connected=false
+        else
+            sleep 2
+            # Test connection
+            if ping -c 1 -W 5 8.8.8.8 >/dev/null 2>&1; then
+                connected=true
+                success "Successfully connected to WiFi and obtained IP address"
+            else
+                warning "Connected to WiFi but no Internet access"
+                connected=false
+            fi
         fi
     fi
     
@@ -258,9 +292,11 @@ EOF
     
     rm -f /tmp/wpa_temp.conf
     
-    # Return result
-    $connected
-    return $?
+    if $connected; then
+        return 0
+    else
+        return 1
+    fi
 }
 
 # Detect and display network interfaces with more detail
@@ -461,16 +497,32 @@ select_wifi_interface
 
 # If in client mode, test the connection now that we have the interface
 if [ "$NETWORK_MODE" = "CLIENT" ]; then
+    debug "Setting up client mode connection testing"
     echo
     status "Testing connection to WiFi network with selected interface..."
-    if ! test_wifi_connection "$CLIENT_SSID" "$CLIENT_PASSWORD"; then
-        warning "Could not verify WiFi connection. Make sure the credentials are correct."
-        if ! confirm "Continue anyway?" "Y"; then
-            echo "Setup cancelled. No changes were made."
-            exit 0
-        fi
+    debug "Testing connection with SSID: $CLIENT_SSID, Interface: $AP_INTERFACE"
+    
+    # Skip test if not running as root
+    if [ "$EUID" -ne 0 ]; then
+        warning "Root access required to test WiFi connection. Skipping test."
+        debug "Skipping test due to non-root execution"
     else
-        success "Successfully connected to WiFi network"
+        debug "About to run test_wifi_connection function"
+        if ! test_wifi_connection "$CLIENT_SSID" "$CLIENT_PASSWORD"; then
+            debug "Connection test failed"
+            warning "Could not verify WiFi connection. Make sure the credentials are correct."
+            warning "The setup will continue, but the WiFi connection may not work properly."
+            warning "You may need to manually configure the WiFi connection after installation."
+            
+            if ! confirm "Continue with setup anyway?" "Y"; then
+                debug "User cancelled setup after failed connection test"
+                echo "Setup cancelled. No changes were made."
+                exit 0
+            fi
+        else
+            debug "Connection test succeeded"
+            success "Successfully connected to WiFi network"
+        fi
     fi
 fi
 
