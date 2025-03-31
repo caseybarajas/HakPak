@@ -835,7 +835,9 @@ setup_network
 status "Checking for conflicting services..."
 
 # Check if NetworkManager is controlling wireless
-if systemctl is-active NetworkManager >/dev/null 2>&1; then
+if [ "$USING_EXISTING_CONNECTION" = true ]; then
+    status "Not modifying NetworkManager configuration to preserve existing connection"
+elif systemctl is-active NetworkManager >/dev/null 2>&1; then
     status "Configuring NetworkManager to ignore ${AP_INTERFACE}..."
     mkdir -p /etc/NetworkManager/conf.d/
     echo -e "[keyfile]\nunmanaged-devices=interface-name:${AP_INTERFACE}" > /etc/NetworkManager/conf.d/hakpak.conf
@@ -889,6 +891,7 @@ setup_wifi_client_existing() {
     success "Using existing connection: SSID=$current_ssid, IP=$current_ip"
     
     # Create a wpa_supplicant service file to ensure connection persists after reboot
+    # but only if it doesn't already exist - don't modify existing working config
     if [ ! -f "/etc/wpa_supplicant/wpa_supplicant-$AP_INTERFACE.conf" ]; then
         status "Creating persistent configuration for existing connection..."
         
@@ -909,10 +912,12 @@ EOF
         else
             success "Saved current wpa_supplicant configuration"
         fi
+    else
+        status "Using existing wpa_supplicant configuration"
     fi
     
-    # Enable and start service
-    systemctl enable wpa_supplicant@$AP_INTERFACE >/dev/null 2>&1 || true
+    # Don't modify systemd service if we're preserving existing connection
+    status "Preserving existing network services configuration"
     
     return 0
 }
