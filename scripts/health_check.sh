@@ -4,6 +4,9 @@
 # This script checks the health of your HakPak installation
 # and provides troubleshooting guidance
 
+# Clear the screen for a cleaner look
+clear
+
 # Colors for output
 BLUE='\033[0;34m'
 GREEN='\033[0;32m'

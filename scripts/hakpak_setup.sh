@@ -4,6 +4,9 @@
 # This script sets up HakPak with proper networking configuration
 # for any Raspberry Pi running Kali Linux
 
+# Clear the screen for a cleaner look
+clear
+
 set -e
 BLUE='\033[0;34m'
 GREEN='\033[0;32m'
