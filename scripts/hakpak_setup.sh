@@ -267,7 +267,17 @@ test_wifi_connection() {
     
     echo "Testing connection using interface $test_iface..."
     
-    # Temporary disconnect from any networks
+    # Check if wpa_supplicant is already running for this interface
+    if pidof wpa_supplicant >/dev/null && grep -q "$test_iface" /proc/$(pidof wpa_supplicant)/cmdline 2>/dev/null; then
+        status "Stopping existing wpa_supplicant for $test_iface"
+        wpa_cli -i $test_iface terminate >/dev/null 2>&1 || true
+        sleep 2
+        # Try to kill any remaining instances
+        pkill -f "wpa_supplicant.*$test_iface" 2>/dev/null || true
+        sleep 1
+    fi
+    
+    # Ensure interface is up
     ip link set $test_iface down 2>/dev/null || true
     sleep 1
     ip link set $test_iface up 2>/dev/null || true
@@ -276,6 +286,11 @@ test_wifi_connection() {
     # Save current network config if wpa_supplicant.conf exists
     if [ -f /etc/wpa_supplicant/wpa_supplicant.conf ]; then
         cp /etc/wpa_supplicant/wpa_supplicant.conf /tmp/wpa_supplicant.conf.bak
+    fi
+    
+    # Remove any existing control interface
+    if [ -e "/var/run/wpa_supplicant/$test_iface" ]; then
+        rm -f "/var/run/wpa_supplicant/$test_iface" 2>/dev/null || true
     fi
     
     # Create a temporary wpa_supplicant configuration
@@ -293,7 +308,7 @@ EOF
     
     # Try to connect (with more error handling)
     if ! wpa_supplicant -B -i $test_iface -c /tmp/wpa_temp.conf 2>/dev/null; then
-        warning "Failed to start wpa_supplicant"
+        warning "Failed to start wpa_supplicant. Interface may be in use by system."
         connected=false
     else
         sleep 3
@@ -323,6 +338,11 @@ EOF
     fi
     
     rm -f /tmp/wpa_temp.conf
+    
+    # Restart NetworkManager if it's installed
+    if systemctl is-active NetworkManager >/dev/null 2>&1; then
+        systemctl restart NetworkManager >/dev/null 2>&1 || true
+    fi
     
     if $connected; then
         return 0
@@ -547,6 +567,23 @@ if ! select_wifi_interface; then
     fi
 fi
 
+# Function to check if interface is already connected
+is_interface_connected() {
+    local iface="$1"
+    
+    # Check if interface has an IP address
+    if ip addr show dev "$iface" 2>/dev/null | grep -q "inet "; then
+        # Check internet connectivity
+        if ping -c 1 -W 2 -I "$iface" 8.8.8.8 >/dev/null 2>&1; then
+            return 0  # Connected with internet
+        else
+            return 1  # Has IP but no internet
+        fi
+    else
+        return 2  # No IP address
+    fi
+}
+
 # If in client mode, test the connection now that we have the interface
 if [ "$NETWORK_MODE" = "CLIENT" ]; then
     debug "Setting up client mode connection testing"
@@ -554,26 +591,56 @@ if [ "$NETWORK_MODE" = "CLIENT" ]; then
     status "Testing connection to WiFi network with selected interface..."
     debug "Testing connection with SSID: $CLIENT_SSID, Interface: $AP_INTERFACE"
     
-    # Skip test if not running as root
-    if [ "$EUID" -ne 0 ]; then
-        warning "Root access required to test WiFi connection. Skipping test."
-        debug "Skipping test due to non-root execution"
-    else
-        debug "About to run test_wifi_connection function"
-        if ! test_wifi_connection "$CLIENT_SSID" "$CLIENT_PASSWORD"; then
-            debug "Connection test failed"
-            warning "Could not verify WiFi connection. Make sure the credentials are correct."
-            warning "The setup will continue, but the WiFi connection may not work properly."
-            warning "You may need to manually configure the WiFi connection after installation."
-            
-            if ! confirm "Continue with setup anyway?" "Y"; then
-                debug "User cancelled setup after failed connection test"
-                echo "Setup cancelled. No changes were made."
-                exit 0
+    # Check if interface is already connected
+    status "Checking if $AP_INTERFACE is already connected..."
+    if is_interface_connected "$AP_INTERFACE"; then
+        success "$AP_INTERFACE is already connected to internet"
+        status "Using existing connection instead of testing"
+        
+        # Get current connection details for display
+        current_ssid=$(iwconfig $AP_INTERFACE 2>/dev/null | grep -oP 'ESSID:"\K[^"]+' || echo "Unknown")
+        current_ip=$(ip -4 addr show $AP_INTERFACE | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -n 1)
+        
+        echo "Current connection: SSID=$current_ssid, IP=$current_ip"
+        
+        if [ "$current_ssid" != "$CLIENT_SSID" ]; then
+            warning "Note: You requested to connect to '$CLIENT_SSID' but currently connected to '$current_ssid'"
+            if confirm "Would you like to continue with the current connection?" "Y"; then
+                success "Using current connection"
+            else
+                if confirm "Disconnect and try connecting to '$CLIENT_SSID'?" "N"; then
+                    status "Attempting to connect to requested network..."
+                    # Continue with test_wifi_connection below
+                else
+                    echo "Setup cancelled. No changes were made."
+                    exit 0
+                fi
             fi
         else
-            debug "Connection test succeeded"
-            success "Successfully connected to WiFi network"
+            success "Already connected to requested network '$CLIENT_SSID'"
+        fi
+    else
+        # Skip test if not running as root
+        if [ "$EUID" -ne 0 ]; then
+            warning "Root access required to test WiFi connection. Skipping test."
+            debug "Skipping test due to non-root execution"
+        else
+            debug "About to run test_wifi_connection function"
+            if ! test_wifi_connection "$CLIENT_SSID" "$CLIENT_PASSWORD"; then
+                debug "Connection test failed"
+                warning "Could not verify WiFi connection. Make sure the credentials are correct."
+                warning "The setup will continue, but the WiFi connection may not work properly."
+                warning "You may need to manually configure the WiFi connection after installation."
+                
+                if ! confirm "Continue with setup anyway?" "Y"; then
+                    debug "User cancelled setup after failed connection test"
+                    echo "Setup cancelled. No changes were made."
+                    exit 0
+                fi
+            else
+                debug "Connection test succeeded"
+                success "Successfully connected to WiFi network"
+            fi
         fi
     fi
 fi
