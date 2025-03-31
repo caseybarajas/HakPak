@@ -21,12 +21,30 @@ if [ "$DEBUG" -eq 1 ]; then
     debug "Debug mode enabled"
 fi
 
+# Error handler function
+handle_error() {
+    local line=$1
+    local command=$2
+    local code=$3
+    echo -e "${RED}Error occurred in command '$command' at line $line (Exit code: $code)${NC}" >&2
+    if [ "$DEBUG" -eq 1 ]; then
+        # In debug mode, don't exit
+        echo -e "${YELLOW}Continuing due to debug mode...${NC}" >&2
+    fi
+}
+
+# Set up error trapping
+trap 'handle_error ${LINENO} "$BASH_COMMAND" $?' ERR
+
 # Clear the screen for a cleaner look (skip in debug mode)
 if [ "$DEBUG" -ne 1 ]; then
     clear
 fi
 
-set -e
+# Don't use set -e as it makes the script exit on any error
+# Instead, we'll handle errors explicitly
+# set -e
+
 BLUE='\033[0;34m'
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -151,6 +169,33 @@ check_command() {
     fi
 }
 
+# Function to handle client mode selection 
+process_client_mode() {
+    debug "Processing client mode setup"
+    
+    # Get WiFi details
+    echo
+    status "Please enter the details of your WiFi network:"
+    
+    # Get and validate SSID
+    while true; do
+        CLIENT_SSID=$(prompt_string "WiFi network name (SSID)" "")
+        if [ -n "$CLIENT_SSID" ]; then
+            debug "CLIENT_SSID set to: $CLIENT_SSID"
+            break
+        else
+            warning "WiFi SSID cannot be empty."
+        fi
+    done
+    
+    # Get password
+    CLIENT_PASSWORD=$(prompt_string "WiFi password" "")
+    debug "CLIENT_PASSWORD set (length: ${#CLIENT_PASSWORD})"
+    
+    success "Client mode details entered successfully"
+    return 0
+}
+
 # Function to select network mode
 select_network_mode() {
     debug "Entering select_network_mode function"
@@ -181,29 +226,16 @@ select_network_mode() {
         NETWORK_MODE="AP"
         success "Selected Access Point Mode"
         debug "Setting NETWORK_MODE=AP"
+        return 0
     else
         NETWORK_MODE="CLIENT"
         success "Selected Client Mode"
         debug "Setting NETWORK_MODE=CLIENT"
         
-        # Get WiFi details
-        echo
-        status "Please enter the details of your WiFi network:"
-        CLIENT_SSID=$(prompt_string "WiFi network name (SSID)" "")
-        debug "CLIENT_SSID set to: $CLIENT_SSID"
-        
-        # Validate SSID
-        while [ -z "$CLIENT_SSID" ]; do
-            warning "WiFi SSID cannot be empty."
-            CLIENT_SSID=$(prompt_string "WiFi network name (SSID)" "")
-            debug "CLIENT_SSID set to: $CLIENT_SSID (after validation)"
-        done
-        
-        # Get password
-        CLIENT_PASSWORD=$(prompt_string "WiFi password" "")
-        debug "CLIENT_PASSWORD set (length: ${#CLIENT_PASSWORD})"
+        # Process client mode setup separately
+        process_client_mode
+        return $?
     fi
-    debug "Exiting select_network_mode function"
 }
 
 # Function to test WiFi connection
@@ -362,11 +394,15 @@ scan_network_interfaces() {
 
 # Enhanced selection for WiFi interface with more info
 select_wifi_interface() {
+    debug "Entering select_wifi_interface function"
+    
     if [ ${#WIFI_INTERFACES[@]} -eq 0 ]; then
         error "No wireless interfaces found. HakPak requires at least one wireless interface."
+        return 1
     elif [ ${#WIFI_INTERFACES[@]} -eq 1 ]; then
         AP_INTERFACE=${WIFI_INTERFACES[0]}
         success "Using ${AP_INTERFACE} for Access Point mode (only wireless interface available)"
+        return 0
     else
         echo
         echo "Multiple wireless interfaces detected. Please select one for the access point:"
@@ -393,7 +429,11 @@ select_wifi_interface() {
         select_option "Which wireless interface should be used for the HakPak access point?" "${WIFI_INTERFACES[@]}"
         AP_INTERFACE_INDEX=$?
         AP_INTERFACE=${WIFI_INTERFACES[$AP_INTERFACE_INDEX]}
+        success "Selected ${AP_INTERFACE} for HakPak"
+        return 0
     fi
+    
+    debug "Exiting select_wifi_interface function"
 }
 
 # Enhanced selection for internet sharing interface
@@ -473,7 +513,7 @@ select_internet_interface() {
 
 # Detect and scan all network interfaces
 status "Scanning for network interfaces..."
-scan_network_interfaces
+scan_network_interfaces || { error "Failed to scan network interfaces"; exit 1; }
 
 # Welcome message
 echo
@@ -490,10 +530,22 @@ if ! confirm "Ready to begin setup?" "Y"; then
 fi
 
 # Select network mode
-select_network_mode
+if ! select_network_mode; then
+    debug "Error occurred in select_network_mode"
+    if [ "$DEBUG" -ne 1 ]; then
+        echo "Setup encountered an error. Try running with DEBUG=1 for more information."
+        exit 1
+    fi
+fi
 
 # Select WiFi interface
-select_wifi_interface
+if ! select_wifi_interface; then
+    debug "Error occurred in select_wifi_interface"
+    if [ "$DEBUG" -ne 1 ]; then
+        echo "Setup encountered an error. Try running with DEBUG=1 for more information."
+        exit 1
+    fi
+fi
 
 # If in client mode, test the connection now that we have the interface
 if [ "$NETWORK_MODE" = "CLIENT" ]; then
