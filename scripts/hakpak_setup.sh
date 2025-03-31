@@ -106,6 +106,31 @@ select_option() {
     return $((choice-1))
 }
 
+# Function to prompt for string input
+prompt_string() {
+    local prompt="$1"
+    local default="$2"
+    local value=""
+    
+    if [ -z "$default" ]; then
+        read -p "$prompt: " value
+    else
+        read -p "$prompt [$default]: " value
+        if [ -z "$value" ]; then
+            value="$default"
+        fi
+    fi
+    
+    echo "$value"
+}
+
+# Function to check if command succeeds
+check_command() {
+    if ! $@; then
+        error "Command failed: $@"
+    fi
+}
+
 # Function to select network mode
 select_network_mode() {
     echo
@@ -236,31 +261,6 @@ EOF
     
     # Return result
     $connected
-}
-
-# Function to prompt for string input
-prompt_string() {
-    local prompt="$1"
-    local default="$2"
-    local value=""
-    
-    if [ -z "$default" ]; then
-        read -p "$prompt: " value
-    else
-        read -p "$prompt [$default]: " value
-        if [ -z "$value" ]; then
-            value="$default"
-        fi
-    fi
-    
-    echo "$value"
-}
-
-# Function to check if command succeeds
-check_command() {
-    if ! $@; then
-        error "Command failed: $@"
-    fi
 }
 
 # Detect and display network interfaces with more detail
