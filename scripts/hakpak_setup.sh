@@ -28,6 +28,7 @@ fi
 NETWORK_MODE="AP"  # Default: AP (Access Point) mode
 CLIENT_SSID=""
 CLIENT_PASSWORD=""
+COUNTRY_CODE="US"  # Default country code
 
 # Function to display status message
 status() {
@@ -175,19 +176,6 @@ select_network_mode() {
         
         # Get password
         CLIENT_PASSWORD=$(prompt_string "WiFi password" "")
-        
-        # Test connection
-        echo
-        status "Testing connection to WiFi network..."
-        if ! test_wifi_connection "$CLIENT_SSID" "$CLIENT_PASSWORD"; then
-            warning "Could not verify WiFi connection. Make sure the credentials are correct."
-            if ! confirm "Continue anyway?" "N"; then
-                select_network_mode
-                return
-            fi
-        else
-            success "Successfully connected to WiFi network"
-        fi
     fi
 }
 
@@ -196,6 +184,7 @@ test_wifi_connection() {
     local ssid="$1"
     local password="$2"
     local test_iface=""
+    local connected=false
     
     # Find a wireless interface to test with
     for iface in "${WIFI_INTERFACES[@]}"; do
@@ -206,15 +195,24 @@ test_wifi_connection() {
     done
     
     if [ -z "$test_iface" ]; then
-        test_iface="${WIFI_INTERFACES[0]}"
+        # If AP_INTERFACE isn't set yet, use the first wireless interface
+        if [ -z "$AP_INTERFACE" ] && [ ${#WIFI_INTERFACES[@]} -gt 0 ]; then
+            test_iface="${WIFI_INTERFACES[0]}"
+        else if [ -n "$AP_INTERFACE" ]; then
+            test_iface="$AP_INTERFACE"
+        else
+            warning "No wireless interface available for testing. Skipping connection test."
+            return 1
+        fi
+        fi
     fi
     
     echo "Testing connection using interface $test_iface..."
     
     # Temporary disconnect from any networks
-    ip link set $test_iface down
+    ip link set $test_iface down 2>/dev/null || true
     sleep 1
-    ip link set $test_iface up
+    ip link set $test_iface up 2>/dev/null || true
     sleep 2
     
     # Save current network config if wpa_supplicant.conf exists
@@ -236,16 +234,17 @@ network={
 EOF
     
     # Try to connect
-    wpa_supplicant -B -i $test_iface -c /tmp/wpa_temp.conf
-    sleep 5
-    dhclient -v $test_iface
-    sleep 3
-    
-    # Test connection
-    if ping -c 1 -W 5 8.8.8.8 >/dev/null 2>&1; then
-        connected=true
+    if ! wpa_supplicant -B -i $test_iface -c /tmp/wpa_temp.conf 2>/dev/null; then
+        warning "Failed to start wpa_supplicant"
     else
-        connected=false
+        sleep 3
+        dhclient -v $test_iface 2>/dev/null || true
+        sleep 2
+        
+        # Test connection
+        if ping -c 1 -W 5 8.8.8.8 >/dev/null 2>&1; then
+            connected=true
+        fi
     fi
     
     # Cleanup
@@ -261,6 +260,7 @@ EOF
     
     # Return result
     $connected
+    return $?
 }
 
 # Detect and display network interfaces with more detail
@@ -459,10 +459,24 @@ select_network_mode
 # Select WiFi interface
 select_wifi_interface
 
+# If in client mode, test the connection now that we have the interface
+if [ "$NETWORK_MODE" = "CLIENT" ]; then
+    echo
+    status "Testing connection to WiFi network with selected interface..."
+    if ! test_wifi_connection "$CLIENT_SSID" "$CLIENT_PASSWORD"; then
+        warning "Could not verify WiFi connection. Make sure the credentials are correct."
+        if ! confirm "Continue anyway?" "Y"; then
+            echo "Setup cancelled. No changes were made."
+            exit 0
+        fi
+    else
+        success "Successfully connected to WiFi network"
+    fi
+fi
+
 # Configuration variables - initialize with defaults
 SSID="hakpak"
 WIFI_PASSWORD="pentestallthethings"
-COUNTRY_CODE="US"
 CHANNEL=6
 IP_ADDRESS="192.168.4.1"
 DHCP_RANGE_START="192.168.4.2"
