@@ -11,6 +11,10 @@ RED='\033[0;31m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
+# Default configuration location
+CONFIG_FILE="/opt/hakpak/config/hakpak.conf"
+NETWORK_MODE="AP"  # Default to AP mode unless config indicates otherwise
+
 # Check if running as root
 if [ "$EUID" -ne 0 ]; then
   echo -e "${RED}Please run as root (sudo)${NC}"
@@ -39,6 +43,33 @@ error() {
 # Function to display warning message
 warning() {
     echo -e "${YELLOW}[!] $1${NC}"
+}
+
+# Detect network mode from configuration
+detect_network_mode() {
+    status "Determining network mode..."
+    
+    if [ -f "$CONFIG_FILE" ]; then
+        if grep -q "network_mode = CLIENT" "$CONFIG_FILE"; then
+            NETWORK_MODE="CLIENT"
+            success "Detected Client network mode"
+        else
+            NETWORK_MODE="AP"
+            success "Detected Access Point (AP) network mode"
+        fi
+    else
+        warning "Configuration file not found at $CONFIG_FILE. Assuming AP mode."
+        NETWORK_MODE="AP"
+    fi
+    
+    # Extract network interface from config
+    if grep -q "ap_interface" "$CONFIG_FILE"; then
+        NETWORK_INTERFACE=$(grep "ap_interface" "$CONFIG_FILE" | cut -d'=' -f2 | xargs)
+        success "Network interface: $NETWORK_INTERFACE"
+    else
+        warning "Could not determine network interface from config, will use default"
+        NETWORK_INTERFACE="wlan0"
+    fi
 }
 
 # Check if service is running
@@ -141,28 +172,53 @@ check_network() {
         if ip addr show $iface | grep -q "state UP"; then
             success "Interface $iface is UP"
             
-            # Check if it's in AP mode
-            if iw dev $iface info | grep -q "type AP"; then
-                success "Interface $iface is in AP mode"
-                AP_IFACE=$iface
-            else
-                if iw dev $iface info | grep -q "type managed"; then
-                    warning "Interface $iface is in managed mode, not AP mode"
+            if [ "$NETWORK_MODE" = "AP" ]; then
+                # Check if it's in AP mode
+                if iw dev $iface info | grep -q "type AP"; then
+                    success "Interface $iface is in AP mode"
+                    AP_IFACE=$iface
                 else
-                    error "Interface $iface is neither in AP nor managed mode"
+                    if iw dev $iface info | grep -q "type managed"; then
+                        warning "Interface $iface is in managed mode, not AP mode"
+                    else
+                        error "Interface $iface is in an unexpected mode"
+                    fi
+                fi
+                
+                # Check if interface has expected IP (192.168.4.x in AP mode)
+                if ip addr show $iface | grep -q "192.168.4"; then
+                    success "HakPak IP address is configured on interface $iface"
+                else
+                    error "Expected IP address (192.168.4.x) not found on interface $iface"
+                fi
+            else
+                # Client mode checks
+                if iw dev $iface info | grep -q "type managed"; then
+                    success "Interface $iface is in managed mode (client mode)"
+                    
+                    # Check if connected to WiFi
+                    if iw dev $iface link | grep -q "Connected to"; then
+                        CONNECTED_SSID=$(iw dev $iface link | grep "SSID" | awk '{print $2}')
+                        success "Connected to WiFi network: $CONNECTED_SSID"
+                    else
+                        error "Not connected to any WiFi network"
+                    fi
+                    
+                    # Check if interface has an IP
+                    if ip addr show $iface | grep -q "inet "; then
+                        CLIENT_IP=$(ip addr show $iface | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -n 1)
+                        success "Interface has IP address: $CLIENT_IP"
+                    else
+                        error "No IP address assigned to interface $iface"
+                    fi
+                else
+                    error "Interface $iface is not in managed mode (client mode)"
                 fi
             fi
         else
             warning "Interface $iface is DOWN"
         fi
     done
-    
-    # Check if interface has IP 192.168.4.1
-    if ip addr | grep -q "192.168.4.1"; then
-        success "HakPak IP address 192.168.4.1 is configured"
-    else
-        error "HakPak IP address 192.168.4.1 is not configured"
-    fi
 }
 
 # Check if WiFi is blocked
@@ -203,24 +259,46 @@ check_flipper() {
 check_configs() {
     status "Checking configuration files..."
     
-    # Check hostapd configuration
-    check_file "/etc/hostapd/hostapd.conf"
-    if [ -f "/etc/hostapd/hostapd.conf" ]; then
-        if grep -q "interface=" /etc/hostapd/hostapd.conf; then
-            AP_IFACE=$(grep "interface=" /etc/hostapd/hostapd.conf | cut -d'=' -f2)
-            success "Hostapd configured to use interface: $AP_IFACE"
-        else
-            error "Hostapd config missing interface definition"
-        fi
-    fi
+    # Check hakpak configuration
+    check_file "$CONFIG_FILE"
     
-    # Check dnsmasq configuration
-    check_file "/etc/dnsmasq.conf"
-    if [ -f "/etc/dnsmasq.conf" ]; then
-        if grep -q "dhcp-range=" /etc/dnsmasq.conf; then
-            success "DNSmasq has DHCP range configured"
+    if [ "$NETWORK_MODE" = "AP" ]; then
+        # AP mode configuration files
+        check_file "/etc/hostapd/hostapd.conf"
+        if [ -f "/etc/hostapd/hostapd.conf" ]; then
+            if grep -q "interface=" /etc/hostapd/hostapd.conf; then
+                AP_IFACE=$(grep "interface=" /etc/hostapd/hostapd.conf | cut -d'=' -f2)
+                success "Hostapd configured to use interface: $AP_IFACE"
+            else
+                error "Hostapd config missing interface definition"
+            fi
+        fi
+        
+        # Check dnsmasq configuration
+        check_file "/etc/dnsmasq.conf"
+        if [ -f "/etc/dnsmasq.conf" ]; then
+            if grep -q "dhcp-range=" /etc/dnsmasq.conf; then
+                success "DNSmasq has DHCP range configured"
+            else
+                error "DNSmasq config missing DHCP range"
+            fi
+        fi
+    else
+        # Client mode configuration files
+        check_file "/etc/wpa_supplicant/wpa_supplicant-${NETWORK_INTERFACE}.conf"
+        if [ -f "/etc/wpa_supplicant/wpa_supplicant-${NETWORK_INTERFACE}.conf" ]; then
+            if grep -q "ssid=" /etc/wpa_supplicant/wpa_supplicant-${NETWORK_INTERFACE}.conf; then
+                success "WPA Supplicant has SSID configured"
+            else
+                error "WPA Supplicant config missing SSID"
+            fi
+        fi
+        
+        # Check wpa_supplicant service
+        if systemctl is-active wpa_supplicant@${NETWORK_INTERFACE} >/dev/null 2>&1; then
+            success "WPA Supplicant service is running"
         else
-            error "DNSmasq config missing DHCP range"
+            error "WPA Supplicant service is not running"
         fi
     fi
     
@@ -238,68 +316,84 @@ check_configs() {
 run_all_checks() {
     status "Beginning comprehensive health check..."
     
+    # First detect network mode
+    detect_network_mode
+    
     # Track overall status
     ISSUES_FOUND=0
     
-    # Check services
+    # Check common services
     check_service "hakpak" || ((ISSUES_FOUND++))
     check_service "nginx" || ((ISSUES_FOUND++))
-    check_service "hostapd" || ((ISSUES_FOUND++))
-    check_service "dnsmasq" || ((ISSUES_FOUND++))
+    
+    # Check mode-specific services
+    if [ "$NETWORK_MODE" = "AP" ]; then
+        check_service "hostapd" || ((ISSUES_FOUND++))
+        check_service "dnsmasq" || ((ISSUES_FOUND++))
+    else
+        check_service "wpa_supplicant@${NETWORK_INTERFACE}" || ((ISSUES_FOUND++))
+        check_service "dhcpcd" || ((ISSUES_FOUND++))
+    fi
     
     # Check configurations
-    check_configs
-    
-    # Check network
-    check_wifi_blocked
-    check_network
+    check_configs || ((ISSUES_FOUND++))
     
     # Check system resources
-    check_resources
+    check_resources || ((ISSUES_FOUND++))
+    
+    # Check WiFi
+    check_wifi_blocked || ((ISSUES_FOUND++))
+    
+    # Check network
+    check_network || ((ISSUES_FOUND++))
     
     # Check Flipper Zero
-    check_flipper
+    check_flipper || ((ISSUES_FOUND++))
     
     # Print summary
     echo
     echo -e "${BLUE}========================================${NC}"
-    echo -e "${BLUE}   Health Check Summary               ${NC}"
+    echo -e "${BLUE}   Health Check Summary              ${NC}"
     echo -e "${BLUE}========================================${NC}"
     
     if [ $ISSUES_FOUND -eq 0 ]; then
-        echo -e "${GREEN}All systems operational! No critical issues found.${NC}"
+        echo -e "${GREEN}No issues found. HakPak is healthy!${NC}"
     else
         echo -e "${YELLOW}Found $ISSUES_FOUND potential issues that need attention.${NC}"
-        
-        # Provide troubleshooting advice
-        echo
-        echo -e "${BLUE}Troubleshooting suggestions:${NC}"
-        
-        # Check if services are down
-        if ! systemctl is-active hakpak >/dev/null 2>&1; then
-            echo -e "${YELLOW}To check HakPak logs:${NC} sudo journalctl -u hakpak -n 50"
-        fi
-        
-        if ! systemctl is-active hostapd >/dev/null 2>&1; then
-            echo -e "${YELLOW}To check Hostapd logs:${NC} sudo journalctl -u hostapd -n 50"
-            echo -e "${YELLOW}To test hostapd config:${NC} sudo hostapd -dd /etc/hostapd/hostapd.conf"
-        fi
-        
-        if ! systemctl is-active dnsmasq >/dev/null 2>&1; then
-            echo -e "${YELLOW}To check DNSmasq logs:${NC} sudo journalctl -u dnsmasq -n 50"
-            echo -e "${YELLOW}To test if port 53 is in use:${NC} sudo lsof -i :53"
-        fi
-        
-        # Suggest fix network script
-        echo -e "${YELLOW}To attempt fixing network issues:${NC} sudo ./scripts/fix_network.sh"
-        
-        # Suggest reboot as last resort
-        echo -e "${YELLOW}If all else fails, try rebooting:${NC} sudo reboot"
     fi
+    
+    # Print troubleshooting tips based on network mode
+    echo
+    echo -e "${BLUE}Troubleshooting Tips:${NC}"
+    if [ "$NETWORK_MODE" = "AP" ]; then
+        echo -e "1. If WiFi network is not visible:"
+        echo -e "   - Run: ${YELLOW}sudo systemctl restart hostapd${NC}"
+        echo -e "   - Check hostapd logs: ${YELLOW}sudo journalctl -u hostapd${NC}"
+        echo -e "2. If WiFi connected but no internet:"
+        echo -e "   - Check internet sharing: ${YELLOW}sudo systemctl restart dnsmasq${NC}"
+        echo -e "   - Verify IP forwarding: ${YELLOW}cat /proc/sys/net/ipv4/ip_forward${NC} (should be 1)"
+    else
+        echo -e "1. If not connecting to WiFi:"
+        echo -e "   - Restart WPA supplicant: ${YELLOW}sudo systemctl restart wpa_supplicant@${NETWORK_INTERFACE}${NC}"
+        echo -e "   - Check WPA logs: ${YELLOW}sudo journalctl -u wpa_supplicant@${NETWORK_INTERFACE}${NC}"
+        echo -e "2. If WiFi connected but no IP address:"
+        echo -e "   - Restart DHCP client: ${YELLOW}sudo systemctl restart dhcpcd${NC}"
+        echo -e "   - Check DHCP logs: ${YELLOW}sudo journalctl -u dhcpcd${NC}"
+    fi
+    
+    echo -e "3. If web interface is not accessible:"
+    echo -e "   - Restart web services: ${YELLOW}sudo systemctl restart nginx hakpak${NC}"
+    echo -e "   - Check logs: ${YELLOW}sudo journalctl -u nginx -u hakpak${NC}"
+    echo
+    echo -e "4. To reboot the system: ${YELLOW}sudo reboot${NC}"
+    
+    # Return the number of issues found
+    return $ISSUES_FOUND
 }
 
-# Execute all checks
+# Main execution
 run_all_checks
+exit $?
 
 echo -e "${BLUE}========================================${NC}"
 echo -e "${BLUE}   Health Check Complete               ${NC}"
