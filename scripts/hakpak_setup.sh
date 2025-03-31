@@ -66,6 +66,7 @@ NETWORK_MODE="AP"  # Default: AP (Access Point) mode
 CLIENT_SSID=""
 CLIENT_PASSWORD=""
 COUNTRY_CODE="US"  # Default country code
+USING_EXISTING_CONNECTION=false  # Flag to track if we're using an existing connection
 
 # Function to display status message
 status() {
@@ -607,6 +608,8 @@ if [ "$NETWORK_MODE" = "CLIENT" ]; then
             warning "Note: You requested to connect to '$CLIENT_SSID' but currently connected to '$current_ssid'"
             if confirm "Would you like to continue with the current connection?" "Y"; then
                 success "Using current connection"
+                CLIENT_SSID="$current_ssid"
+                USING_EXISTING_CONNECTION=true
             else
                 if confirm "Disconnect and try connecting to '$CLIENT_SSID'?" "N"; then
                     status "Attempting to connect to requested network..."
@@ -618,6 +621,7 @@ if [ "$NETWORK_MODE" = "CLIENT" ]; then
             fi
         else
             success "Already connected to requested network '$CLIENT_SSID'"
+            USING_EXISTING_CONNECTION=true
         fi
     else
         # Skip test if not running as root
@@ -813,13 +817,19 @@ done
 success "All required packages are installed"
 
 # Stop network services
-if [ "$NETWORK_MODE" = "AP" ]; then
-    status "Stopping network services..."
-    systemctl stop hostapd dnsmasq 2>/dev/null || true
+if [ "$USING_EXISTING_CONNECTION" = true ]; then
+    status "Preserving existing network connection..."
 else
     status "Stopping network services..."
-    systemctl stop wpa_supplicant 2>/dev/null || true
+    if [ "$NETWORK_MODE" = "AP" ]; then
+        systemctl stop hostapd dnsmasq 2>/dev/null || true
+    else
+        systemctl stop wpa_supplicant 2>/dev/null || true
+    fi
 fi
+
+# Configure network based on selected mode
+setup_network
 
 # Handle any conflicting services
 status "Checking for conflicting services..."
@@ -867,8 +877,56 @@ if [ -f /etc/network/interfaces ]; then
     cp /etc/network/interfaces ${BACKUP_DIR}/interfaces.bak
 fi
 
-# Configure network based on selected mode
-setup_network
+# Function for configuring an existing client connection
+setup_wifi_client_existing() {
+    status "Configuring client mode using existing connection..."
+    
+    # Get current connection details
+    current_ip=$(ip -4 addr show $AP_INTERFACE | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -n 1)
+    current_ssid=$(iwconfig $AP_INTERFACE 2>/dev/null | grep -oP 'ESSID:"\K[^"]+' || echo "Unknown")
+    current_gateway=$(ip route show dev $AP_INTERFACE | grep default | awk '{print $3}')
+    
+    success "Using existing connection: SSID=$current_ssid, IP=$current_ip"
+    
+    # Create a wpa_supplicant service file to ensure connection persists after reboot
+    if [ ! -f "/etc/wpa_supplicant/wpa_supplicant-$AP_INTERFACE.conf" ]; then
+        status "Creating persistent configuration for existing connection..."
+        
+        # Get the current wpa_supplicant configuration if possible
+        if ! wpa_cli -i $AP_INTERFACE save_config >/dev/null 2>&1; then
+            # If we can't save the current config, create a basic one
+            status "Creating basic wpa_supplicant configuration..."
+            cat > "/etc/wpa_supplicant/wpa_supplicant-$AP_INTERFACE.conf" << EOF
+ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
+update_config=1
+country=$COUNTRY_CODE
+
+# Configuration created from existing connection
+# SSID: $current_ssid
+EOF
+            warning "Note: The WiFi credentials have not been saved. You may need to reconfigure WiFi after reboot."
+            warning "The system will attempt to reconnect to '$current_ssid' but might require the password again."
+        else
+            success "Saved current wpa_supplicant configuration"
+        fi
+    fi
+    
+    # Enable and start service
+    systemctl enable wpa_supplicant@$AP_INTERFACE >/dev/null 2>&1 || true
+    
+    return 0
+}
+
+# Function for configuring network based on selected mode
+setup_network() {
+    if [ "$NETWORK_MODE" = "AP" ]; then
+        setup_wifi_ap
+    elif [ "$USING_EXISTING_CONNECTION" = true ]; then
+        setup_wifi_client_existing
+    else
+        setup_wifi_client
+    fi
+}
 
 # Add Nginx config for HakPak
 status "Configuring Nginx..."
