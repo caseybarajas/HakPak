@@ -847,53 +847,8 @@ mkdir -p /etc/nginx/sites-enabled/
 ln -sf /etc/nginx/sites-available/hakpak /etc/nginx/sites-enabled/
 rm -f /etc/nginx/sites-enabled/default
 
-# Set up IP forwarding and NAT if in AP mode and internet sharing is requested
-if [ "$NETWORK_MODE" = "AP" ] && [ "$ENABLE_INTERNET_SHARING" = true ] && [ -n "$INTERNET_IFACE" ] && [ "$INTERNET_IFACE" != "$AP_INTERFACE" ]; then
-    status "Setting up IP forwarding and NAT for internet sharing..."
-    echo 1 > /proc/sys/net/ipv4/ip_forward
-    
-    # Set up persistent IP forwarding
-    if ! grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf; then
-        echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
-    fi
-    
-    # Set up NAT rules
-    iptables -t nat -F
-    iptables -t nat -A POSTROUTING -o $INTERNET_IFACE -j MASQUERADE
-    iptables -F
-    iptables -A FORWARD -i $INTERNET_IFACE -o ${AP_INTERFACE} -m state --state RELATED,ESTABLISHED -j ACCEPT
-    iptables -A FORWARD -i ${AP_INTERFACE} -o $INTERNET_IFACE -j ACCEPT
-    
-    # Make iptables rules persistent
-    if command -v iptables-save >/dev/null 2>&1; then
-        status "Making iptables rules persistent..."
-        mkdir -p /etc/iptables/
-        iptables-save > /etc/iptables/rules.v4
-        
-        # Create a service to restore iptables rules
-        cat > /etc/systemd/system/iptables-restore.service << EOF
-[Unit]
-Description=Restore iptables rules
-After=network.target
-
-[Service]
-Type=oneshot
-ExecStart=/sbin/iptables-restore /etc/iptables/rules.v4
-RemainAfterExit=yes
-
-[Install]
-WantedBy=multi-user.target
-EOF
-        systemctl daemon-reload
-        systemctl enable iptables-restore.service
-    fi
-    
-    success "IP forwarding and NAT configured"
-else
-    if [ "$NETWORK_MODE" = "AP" ]; then
-        status "Internet sharing not configured. HakPak will operate in standalone mode."
-    fi
-fi
+# Make sure Nginx directory permissions are correct
+chown -R www-data:www-data ${INSTALL_DIR}/public
 
 # Set up HakPak application
 status "Setting up HakPak application..."
@@ -932,7 +887,6 @@ ap_interface = ${AP_INTERFACE}
 ip_address = ${IP_ADDRESS}
 ssid = ${SSID}
 internet_sharing = ${ENABLE_INTERNET_SHARING}
-internet_interface = ${INTERNET_IFACE}
 EOF
 
 # Add client mode specific settings if applicable
@@ -942,91 +896,77 @@ client_ssid = ${CLIENT_SSID}
 EOF
 fi
 
-# Begin actual installation
-echo
-echo -e "${BLUE}========================================${NC}"
-echo -e "${BLUE}   Starting Installation              ${NC}"
-echo -e "${BLUE}========================================${NC}"
-
-# Confirm one last time before making changes
-if ! confirm "This will modify system files. Are you sure you want to continue?" "Y"; then
-    echo "Setup cancelled. No changes were made."
-    exit 0
-fi
-
-# Function for configuring an existing client connection
-setup_wifi_client_existing() {
-    status "Configuring client mode using existing connection..."
-    
-    # Get current connection details
-    current_ip=$(ip -4 addr show $AP_INTERFACE | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -n 1)
-    current_ssid=$(iwconfig $AP_INTERFACE 2>/dev/null | grep -oP 'ESSID:"\K[^"]+' || echo "Unknown")
-    current_gateway=$(ip route show dev $AP_INTERFACE | grep default | awk '{print $3}')
-    
-    success "Using existing connection: SSID=$current_ssid, IP=$current_ip"
-    
-    # Create a wpa_supplicant service file to ensure connection persists after reboot
-    # but only if it doesn't already exist - don't modify existing working config
-    if [ ! -f "/etc/wpa_supplicant/wpa_supplicant-$AP_INTERFACE.conf" ]; then
-        status "Creating persistent configuration for existing connection..."
-        
-        # Get the current wpa_supplicant configuration if possible
-        if ! wpa_cli -i $AP_INTERFACE save_config >/dev/null 2>&1; then
-            # If we can't save the current config, create a basic one
-            status "Creating basic wpa_supplicant configuration..."
-            cat > "/etc/wpa_supplicant/wpa_supplicant-$AP_INTERFACE.conf" << EOF
-ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
-update_config=1
-country=$COUNTRY_CODE
-
-# Configuration created from existing connection
-# SSID: $current_ssid
-EOF
-            warning "Note: The WiFi credentials have not been saved. You may need to reconfigure WiFi after reboot."
-            warning "The system will attempt to reconnect to '$current_ssid' but might require the password again."
-        else
-            success "Saved current wpa_supplicant configuration"
-        fi
-    else
-        status "Using existing wpa_supplicant configuration"
-    fi
-    
-    # Don't modify systemd service if we're preserving existing connection
-    status "Preserving existing network services configuration"
-    
-    return 0
-}
-
-# Function for configuring network based on selected mode
-setup_network() {
-    if [ "$NETWORK_MODE" = "AP" ]; then
-        setup_wifi_ap
-    elif [ "$USING_EXISTING_CONNECTION" = true ]; then
-        setup_wifi_client_existing
-    else
-        setup_wifi_client
-    fi
-}
-
-# Check for required packages
-status "Checking required packages..."
-PACKAGES="nginx python3-pip python3-venv usbutils git rfkill iw wireless-tools"
-
-# Add packages based on network mode
-if [ "$NETWORK_MODE" = "AP" ]; then
-    PACKAGES="$PACKAGES hostapd dnsmasq"
+# Install Python dependencies
+status "Installing Python dependencies..."
+${INSTALL_DIR}/venv/bin/pip install --upgrade pip || python3 -m pip install --upgrade pip
+# Try multiple ways to install requirements in case one fails
+if [ -f "${INSTALL_DIR}/requirements.txt" ]; then
+    status "Installing from requirements.txt..."
+    ${INSTALL_DIR}/venv/bin/pip install -r ${INSTALL_DIR}/requirements.txt || \
+    python3 -m pip install -r ${INSTALL_DIR}/requirements.txt
 else
-    PACKAGES="$PACKAGES wpasupplicant dhcpcd"
+    warning "requirements.txt not found. Installing basic packages..."
+    ${INSTALL_DIR}/venv/bin/pip install flask flask-socketio gunicorn || \
+    python3 -m pip install flask flask-socketio gunicorn
 fi
 
-apt update
-for pkg in $PACKAGES; do
-    if ! dpkg -s $pkg >/dev/null 2>&1; then
-        status "Installing $pkg..."
-        apt install -y $pkg
+# Make sure app directories exist and have correct permissions
+mkdir -p ${INSTALL_DIR}/app/static
+mkdir -p ${INSTALL_DIR}/app/templates
+chmod -R 755 ${INSTALL_DIR}
+
+# Create HakPak service
+status "Creating HakPak service..."
+cat > /etc/systemd/system/hakpak.service << EOF
+[Unit]
+Description=HakPak Service
+After=network.target
+
+[Service]
+User=root
+WorkingDirectory=${INSTALL_DIR}
+ExecStart=${INSTALL_DIR}/venv/bin/python ${INSTALL_DIR}/app.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Enable and start services
+status "Starting services..."
+systemctl daemon-reload
+systemctl enable nginx hakpak
+systemctl restart nginx
+
+# Give Nginx time to start
+sleep 2
+
+# Only start hakpak if the service file was created properly
+if [ -f "/etc/systemd/system/hakpak.service" ]; then
+    systemctl restart hakpak
+    sleep 3
+    if systemctl is-active hakpak >/dev/null 2>&1; then
+        success "HakPak service started successfully"
+    else
+        warning "HakPak service failed to start. Check logs with: journalctl -u hakpak"
+        status "Attempting to start app.py manually for troubleshooting..."
+        status "Check for errors in the output below:"
+        cd ${INSTALL_DIR}
+        ${INSTALL_DIR}/venv/bin/python ${INSTALL_DIR}/app.py --check-only || true
+        echo
     fi
-done
-success "All required packages are installed"
+else
+    warning "HakPak service file not created. Web interface will not be available."
+fi
+
+# Check if Nginx is running
+if systemctl is-active nginx >/dev/null 2>&1; then
+    success "Nginx started successfully"
+else
+    warning "Nginx failed to start. Check logs with: journalctl -u nginx"
+    nginx -t || true
+fi
 
 # Add this function for final steps and verification based on network mode
 final_setup_and_verify() {
@@ -1163,8 +1103,124 @@ EOF
     success "Connection guide created at ${INSTALL_DIR}/docs/connect.md"
 }
 
-# At the very end of the script, before the final echo, add:
+# Function to troubleshoot and fix common issues
+troubleshoot_and_fix() {
+    status "Running additional troubleshooting checks..."
+    
+    # Check nginx configuration
+    if ! nginx -t >/dev/null 2>&1; then
+        warning "Nginx configuration has errors, attempting to fix..."
+        nginx -t
+        # Create a simpler configuration
+        cat > /etc/nginx/sites-available/hakpak << EOF
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    
+    root ${INSTALL_DIR}/public;
+    index index.html;
+    
+    server_name _;
+    
+    location / {
+        try_files \$uri \$uri/ =404;
+    }
+}
+EOF
+        ln -sf /etc/nginx/sites-available/hakpak /etc/nginx/sites-enabled/
+        rm -f /etc/nginx/sites-enabled/default
+        systemctl restart nginx
+        
+        if nginx -t >/dev/null 2>&1; then
+            success "Fixed Nginx configuration"
+        else
+            warning "Still having issues with Nginx configuration"
+        fi
+    fi
+    
+    # Check if HakPak service is running
+    if ! systemctl is-active hakpak >/dev/null 2>&1; then
+        warning "HakPak service is not running, checking for issues..."
+        
+        # Check if app.py exists
+        if [ ! -f "${INSTALL_DIR}/app.py" ]; then
+            warning "app.py not found in ${INSTALL_DIR}"
+            find ${INSTALL_DIR} -name "app.py" 2>/dev/null
+            status "Checking for any Python files..."
+            find ${INSTALL_DIR} -name "*.py" | head -5
+        fi
+        
+        # Check for Python modules
+        if [ -d "${INSTALL_DIR}/venv" ]; then
+            status "Checking installed Python modules..."
+            ${INSTALL_DIR}/venv/bin/pip list | grep -i flask
+        else
+            warning "Python virtualenv not found at ${INSTALL_DIR}/venv"
+        fi
+        
+        # Create a simple test page that should definitely work
+        status "Creating a simple test page..."
+        mkdir -p ${INSTALL_DIR}/public
+        cat > ${INSTALL_DIR}/public/index.html << EOF
+<!DOCTYPE html>
+<html>
+<head>
+    <title>HakPak Test Page</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 40px;
+            line-height: 1.6;
+        }
+        .success {
+            color: green;
+            font-weight: bold;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        h1 {
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>HakPak Test Page</h1>
+        <p class="success">If you see this page, Nginx is working properly!</p>
+        <p>The HakPak application itself might still be starting up or encountering issues.</p>
+        <p>Try the following steps:</p>
+        <ol>
+            <li>Wait a few minutes for all services to start</li>
+            <li>Check the status: <code>sudo systemctl status hakpak</code></li>
+            <li>View the logs: <code>sudo journalctl -u hakpak</code></li>
+            <li>Restart the service: <code>sudo systemctl restart hakpak</code></li>
+        </ol>
+        <p>You can also run the health check script: <code>${INSTALL_DIR}/scripts/health_check.sh</code></p>
+        <hr>
+        <p><small>IP Address: ${IP_ADDRESS} (AP mode) or ${CLIENT_IP} (Client mode)</small></p>
+        <p><small>Generated: $(date)</small></p>
+    </div>
+</body>
+</html>
+EOF
+        chown -R www-data:www-data ${INSTALL_DIR}/public
+        
+        status "Restarting Nginx..."
+        systemctl restart nginx
+        
+        status "Attempting to start HakPak service again..."
+        systemctl restart hakpak
+    fi
+}
+
+# After running final_setup_and_verify, call the troubleshooting function
 final_setup_and_verify
+troubleshoot_and_fix
 
 echo -e "${GREEN}========================================${NC}"
 echo -e "${GREEN}   HakPak Setup Complete!              ${NC}"
