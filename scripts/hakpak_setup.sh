@@ -784,86 +784,6 @@ fi
 BACKUP_DIR="$INSTALL_DIR/backups/$(date +%Y%m%d%H%M%S)"
 mkdir -p $BACKUP_DIR
 
-# Begin actual installation
-echo
-echo -e "${BLUE}========================================${NC}"
-echo -e "${BLUE}   Starting Installation              ${NC}"
-echo -e "${BLUE}========================================${NC}"
-
-# Confirm one last time before making changes
-if ! confirm "This will modify system files. Are you sure you want to continue?" "Y"; then
-    echo "Setup cancelled. No changes were made."
-    exit 0
-fi
-
-# Check for required packages
-status "Checking required packages..."
-PACKAGES="nginx python3-pip python3-venv usbutils git rfkill iw wireless-tools"
-
-# Add packages based on network mode
-if [ "$NETWORK_MODE" = "AP" ]; then
-    PACKAGES="$PACKAGES hostapd dnsmasq"
-else
-    PACKAGES="$PACKAGES wpasupplicant dhcpcd"
-fi
-
-apt update
-for pkg in $PACKAGES; do
-    if ! dpkg -s $pkg >/dev/null 2>&1; then
-        status "Installing $pkg..."
-        apt install -y $pkg
-    fi
-done
-success "All required packages are installed"
-
-# Stop network services
-if [ "$USING_EXISTING_CONNECTION" = true ]; then
-    status "Preserving existing network connection..."
-else
-    status "Stopping network services..."
-    if [ "$NETWORK_MODE" = "AP" ]; then
-        systemctl stop hostapd dnsmasq 2>/dev/null || true
-    else
-        systemctl stop wpa_supplicant 2>/dev/null || true
-    fi
-fi
-
-# Configure network based on selected mode
-setup_network
-
-# Handle any conflicting services
-status "Checking for conflicting services..."
-
-# Check if NetworkManager is controlling wireless
-if [ "$USING_EXISTING_CONNECTION" = true ]; then
-    status "Not modifying NetworkManager configuration to preserve existing connection"
-elif systemctl is-active NetworkManager >/dev/null 2>&1; then
-    status "Configuring NetworkManager to ignore ${AP_INTERFACE}..."
-    mkdir -p /etc/NetworkManager/conf.d/
-    echo -e "[keyfile]\nunmanaged-devices=interface-name:${AP_INTERFACE}" > /etc/NetworkManager/conf.d/hakpak.conf
-    check_command systemctl restart NetworkManager
-fi
-
-# Check for processes using port 53 (only needed in AP mode)
-if [ "$NETWORK_MODE" = "AP" ]; then
-    PORT_53_PROCESS=$(lsof -i :53 2>/dev/null | grep LISTEN | awk '{print $1}' | uniq)
-    if [ ! -z "$PORT_53_PROCESS" ]; then
-        warning "Found $PORT_53_PROCESS using port 53. Attempting to handle..."
-        
-        # Handle systemd-resolved
-        if [[ "$PORT_53_PROCESS" == *"systemd-r"* ]]; then
-            status "Configuring systemd-resolved to work with dnsmasq..."
-            if [ -f /etc/systemd/resolved.conf ]; then
-                cp /etc/systemd/resolved.conf ${BACKUP_DIR}/resolved.conf.bak
-                sed -i 's/#DNSStubListener=yes/DNSStubListener=no/' /etc/systemd/resolved.conf
-                systemctl restart systemd-resolved
-            fi
-        else
-            warning "Unknown service using port 53. You may need to manually stop it."
-        fi
-    fi
-fi
-
 # Backup existing configurations
 status "Backing up existing configurations..."
 if [ -f /etc/hostapd/hostapd.conf ]; then
@@ -879,59 +799,20 @@ if [ -f /etc/network/interfaces ]; then
     cp /etc/network/interfaces ${BACKUP_DIR}/interfaces.bak
 fi
 
-# Function for configuring an existing client connection
-setup_wifi_client_existing() {
-    status "Configuring client mode using existing connection..."
-    
-    # Get current connection details
-    current_ip=$(ip -4 addr show $AP_INTERFACE | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -n 1)
-    current_ssid=$(iwconfig $AP_INTERFACE 2>/dev/null | grep -oP 'ESSID:"\K[^"]+' || echo "Unknown")
-    current_gateway=$(ip route show dev $AP_INTERFACE | grep default | awk '{print $3}')
-    
-    success "Using existing connection: SSID=$current_ssid, IP=$current_ip"
-    
-    # Create a wpa_supplicant service file to ensure connection persists after reboot
-    # but only if it doesn't already exist - don't modify existing working config
-    if [ ! -f "/etc/wpa_supplicant/wpa_supplicant-$AP_INTERFACE.conf" ]; then
-        status "Creating persistent configuration for existing connection..."
-        
-        # Get the current wpa_supplicant configuration if possible
-        if ! wpa_cli -i $AP_INTERFACE save_config >/dev/null 2>&1; then
-            # If we can't save the current config, create a basic one
-            status "Creating basic wpa_supplicant configuration..."
-            cat > "/etc/wpa_supplicant/wpa_supplicant-$AP_INTERFACE.conf" << EOF
-ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
-update_config=1
-country=$COUNTRY_CODE
-
-# Configuration created from existing connection
-# SSID: $current_ssid
-EOF
-            warning "Note: The WiFi credentials have not been saved. You may need to reconfigure WiFi after reboot."
-            warning "The system will attempt to reconnect to '$current_ssid' but might require the password again."
-        else
-            success "Saved current wpa_supplicant configuration"
-        fi
-    else
-        status "Using existing wpa_supplicant configuration"
-    fi
-    
-    # Don't modify systemd service if we're preserving existing connection
-    status "Preserving existing network services configuration"
-    
-    return 0
-}
-
-# Function for configuring network based on selected mode
-setup_network() {
+# Stop network services
+if [ "$USING_EXISTING_CONNECTION" = true ]; then
+    status "Preserving existing network connection..."
+else
+    status "Stopping network services..."
     if [ "$NETWORK_MODE" = "AP" ]; then
-        setup_wifi_ap
-    elif [ "$USING_EXISTING_CONNECTION" = true ]; then
-        setup_wifi_client_existing
+        systemctl stop hostapd dnsmasq 2>/dev/null || true
     else
-        setup_wifi_client
+        systemctl stop wpa_supplicant 2>/dev/null || true
     fi
-}
+fi
+
+# Configure network based on selected mode
+setup_network
 
 # Add Nginx config for HakPak
 status "Configuring Nginx..."
@@ -1061,8 +942,91 @@ client_ssid = ${CLIENT_SSID}
 EOF
 fi
 
-# Install Python dependencies and finish the rest of the setup as before
-// ... existing code ... 
+# Begin actual installation
+echo
+echo -e "${BLUE}========================================${NC}"
+echo -e "${BLUE}   Starting Installation              ${NC}"
+echo -e "${BLUE}========================================${NC}"
+
+# Confirm one last time before making changes
+if ! confirm "This will modify system files. Are you sure you want to continue?" "Y"; then
+    echo "Setup cancelled. No changes were made."
+    exit 0
+fi
+
+# Function for configuring an existing client connection
+setup_wifi_client_existing() {
+    status "Configuring client mode using existing connection..."
+    
+    # Get current connection details
+    current_ip=$(ip -4 addr show $AP_INTERFACE | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -n 1)
+    current_ssid=$(iwconfig $AP_INTERFACE 2>/dev/null | grep -oP 'ESSID:"\K[^"]+' || echo "Unknown")
+    current_gateway=$(ip route show dev $AP_INTERFACE | grep default | awk '{print $3}')
+    
+    success "Using existing connection: SSID=$current_ssid, IP=$current_ip"
+    
+    # Create a wpa_supplicant service file to ensure connection persists after reboot
+    # but only if it doesn't already exist - don't modify existing working config
+    if [ ! -f "/etc/wpa_supplicant/wpa_supplicant-$AP_INTERFACE.conf" ]; then
+        status "Creating persistent configuration for existing connection..."
+        
+        # Get the current wpa_supplicant configuration if possible
+        if ! wpa_cli -i $AP_INTERFACE save_config >/dev/null 2>&1; then
+            # If we can't save the current config, create a basic one
+            status "Creating basic wpa_supplicant configuration..."
+            cat > "/etc/wpa_supplicant/wpa_supplicant-$AP_INTERFACE.conf" << EOF
+ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
+update_config=1
+country=$COUNTRY_CODE
+
+# Configuration created from existing connection
+# SSID: $current_ssid
+EOF
+            warning "Note: The WiFi credentials have not been saved. You may need to reconfigure WiFi after reboot."
+            warning "The system will attempt to reconnect to '$current_ssid' but might require the password again."
+        else
+            success "Saved current wpa_supplicant configuration"
+        fi
+    else
+        status "Using existing wpa_supplicant configuration"
+    fi
+    
+    # Don't modify systemd service if we're preserving existing connection
+    status "Preserving existing network services configuration"
+    
+    return 0
+}
+
+# Function for configuring network based on selected mode
+setup_network() {
+    if [ "$NETWORK_MODE" = "AP" ]; then
+        setup_wifi_ap
+    elif [ "$USING_EXISTING_CONNECTION" = true ]; then
+        setup_wifi_client_existing
+    else
+        setup_wifi_client
+    fi
+}
+
+# Check for required packages
+status "Checking required packages..."
+PACKAGES="nginx python3-pip python3-venv usbutils git rfkill iw wireless-tools"
+
+# Add packages based on network mode
+if [ "$NETWORK_MODE" = "AP" ]; then
+    PACKAGES="$PACKAGES hostapd dnsmasq"
+else
+    PACKAGES="$PACKAGES wpasupplicant dhcpcd"
+fi
+
+apt update
+for pkg in $PACKAGES; do
+    if ! dpkg -s $pkg >/dev/null 2>&1; then
+        status "Installing $pkg..."
+        apt install -y $pkg
+    fi
+done
+success "All required packages are installed"
 
 # Add this function for final steps and verification based on network mode
 final_setup_and_verify() {
