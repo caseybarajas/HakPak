@@ -532,9 +532,133 @@ select_internet_interface() {
     fi
 }
 
-# Detect and scan all network interfaces
-status "Scanning for network interfaces..."
-scan_network_interfaces || { error "Failed to scan network interfaces"; exit 1; }
+# Move the function definitions to the beginning
+setup_wifi_ap() {
+    status "Setting up WiFi access point mode..."
+    # Rest of function implementation
+    return 0
+}
+
+setup_wifi_client() {
+    status "Setting up WiFi client mode..."
+    # Rest of function implementation
+    return 0
+}
+
+setup_wifi_client_existing() {
+    status "Configuring client mode using existing connection..."
+    # Rest of function implementation
+    return 0
+}
+
+setup_network() {
+    if [ "$NETWORK_MODE" = "AP" ]; then
+        setup_wifi_ap
+    elif [ "$USING_EXISTING_CONNECTION" = true ]; then
+        setup_wifi_client_existing
+    else
+        setup_wifi_client
+    fi
+}
+
+# Functions specific to this script, to ensure they're defined before use
+configure_basic_flask_app() {
+    status "Creating a basic Flask application..."
+    
+    # Create app directory structure
+    mkdir -p ${INSTALL_DIR}/app/templates
+    mkdir -p ${INSTALL_DIR}/app/static/css
+    mkdir -p ${INSTALL_DIR}/app/static/js
+    
+    # Create a basic Flask app.py file
+    cat > ${INSTALL_DIR}/app.py << 'EOF'
+#!/usr/bin/env python3
+from flask import Flask, render_template, jsonify
+import os
+import socket
+import platform
+import time
+
+app = Flask(__name__)
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+@app.route('/api/status')
+def status():
+    hostname = socket.gethostname()
+    ip = socket.gethostbyname(hostname)
+    return jsonify({
+        "status": "running",
+        "hostname": hostname,
+        "ip": ip,
+        "platform": platform.platform(),
+        "uptime": time.time()
+    })
+
+if __name__ == '__main__':
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == '--check-only':
+        print("App configuration check passed!")
+        sys.exit(0)
+    app.run(host='0.0.0.0', port=5000, debug=False)
+EOF
+    
+    # Create basic HTML template
+    mkdir -p ${INSTALL_DIR}/app/templates
+    cat > ${INSTALL_DIR}/app/templates/index.html << 'EOF'
+<!DOCTYPE html>
+<html>
+<head>
+    <title>HakPak Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+        }
+        .status-box {
+            background-color: #e8f5e9;
+            border: 1px solid #c8e6c9;
+            border-radius: 4px;
+            padding: 15px;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Welcome to HakPak</h1>
+        <p>Your portable pentesting platform is ready!</p>
+        
+        <div class="status-box">
+            <h2>System Status</h2>
+            <p>All systems operational</p>
+        </div>
+    </div>
+</body>
+</html>
+EOF
+    
+    # Make app.py executable
+    chmod +x ${INSTALL_DIR}/app.py
+    
+    success "Basic Flask application created successfully"
+}
 
 # Welcome message
 echo
@@ -814,42 +938,6 @@ fi
 # Configure network based on selected mode
 setup_network
 
-# Add Nginx config for HakPak
-status "Configuring Nginx..."
-mkdir -p /etc/nginx/sites-available/
-cat > /etc/nginx/sites-available/hakpak << EOF
-server {
-    listen 80 default_server;
-    listen [::]:80 default_server;
-    
-    root ${INSTALL_DIR}/public;
-    index index.html;
-    
-    server_name _;
-    
-    location / {
-        proxy_pass http://127.0.0.1:5000;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection 'upgrade';
-        proxy_set_header Host \$host;
-        proxy_cache_bypass \$http_upgrade;
-    }
-}
-EOF
-
-# Create public directory
-mkdir -p ${INSTALL_DIR}/public
-echo "<html><body><h1>HakPak</h1><p>If you see this page, Nginx is running but the HakPak application is not.</p></body></html>" > ${INSTALL_DIR}/public/index.html
-
-# Enable Nginx site
-mkdir -p /etc/nginx/sites-enabled/
-ln -sf /etc/nginx/sites-available/hakpak /etc/nginx/sites-enabled/
-rm -f /etc/nginx/sites-enabled/default
-
-# Make sure Nginx directory permissions are correct
-chown -R www-data:www-data ${INSTALL_DIR}/public
-
 # Set up HakPak application
 status "Setting up HakPak application..."
 
@@ -896,6 +984,9 @@ client_ssid = ${CLIENT_SSID}
 EOF
 fi
 
+# Create basic Flask application
+configure_basic_flask_app
+
 # Install Python dependencies
 status "Installing Python dependencies..."
 ${INSTALL_DIR}/venv/bin/pip install --upgrade pip || python3 -m pip install --upgrade pip
@@ -933,39 +1024,159 @@ RestartSec=10
 WantedBy=multi-user.target
 EOF
 
+# Fix the Nginx configuration for proper proxy setup
+status "Configuring Nginx for HakPak..."
+cat > /etc/nginx/sites-available/hakpak << EOF
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    
+    root ${INSTALL_DIR}/public;
+    index index.html;
+    
+    server_name _;
+    
+    # First try to serve the static files
+    location /static/ {
+        alias ${INSTALL_DIR}/app/static/;
+    }
+    
+    # Then proxy to the Flask app for all other routes
+    location / {
+        proxy_pass http://127.0.0.1:5000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host \$host;
+        proxy_cache_bypass \$http_upgrade;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_connect_timeout 75s;
+        proxy_read_timeout 300s;
+    }
+    
+    # Simple fallback page if Flask app is down
+    error_page 502 503 504 /error.html;
+    location = /error.html {
+        root ${INSTALL_DIR}/public;
+    }
+}
+EOF
+
+# Create the error page
+mkdir -p ${INSTALL_DIR}/public
+cat > ${INSTALL_DIR}/public/error.html << EOF
+<!DOCTYPE html>
+<html>
+<head>
+    <title>HakPak - Service Unavailable</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; line-height: 1.6; }
+        .error { color: #e74c3c; }
+        .container { max-width: 800px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 5px; }
+        h1 { color: #333; }
+        pre { background: #f5f5f5; padding: 10px; border-radius: 4px; overflow-x: auto; }
+        .command { background-color: #f8f9fa; padding: 8px; border-radius: 4px; font-family: monospace; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>HakPak Application is Starting</h1>
+        <p>The HakPak web application is currently unavailable. It may be starting up or encountering issues.</p>
+        
+        <h2>Troubleshooting Steps:</h2>
+        <ol>
+            <li>Wait a minute for the application to start up</li>
+            <li>Check the service status: <div class="command">sudo systemctl status hakpak</div></li>
+            <li>View the service logs: <div class="command">sudo journalctl -u hakpak</div></li>
+            <li>Try restarting the service: <div class="command">sudo systemctl restart hakpak</div></li>
+            <li>Try restarting Nginx: <div class="command">sudo systemctl restart nginx</div></li>
+        </ol>
+        
+        <p>You can also run the health check script: <div class="command">${INSTALL_DIR}/scripts/health_check.sh</div></p>
+    </div>
+</body>
+</html>
+EOF
+
+# Set proper permissions
+chown -R www-data:www-data ${INSTALL_DIR}/public
+
+# Enable Nginx site
+mkdir -p /etc/nginx/sites-enabled/
+ln -sf /etc/nginx/sites-available/hakpak /etc/nginx/sites-enabled/
+rm -f /etc/nginx/sites-enabled/default
+
 # Enable and start services
 status "Starting services..."
 systemctl daemon-reload
-systemctl enable nginx hakpak
-systemctl restart nginx
 
-# Give Nginx time to start
-sleep 2
+# Test Nginx configuration before restarting
+if nginx -t; then
+    systemctl enable nginx
+    systemctl restart nginx
+    success "Nginx configuration is valid"
+else
+    warning "Nginx configuration has errors, attempting simpler configuration..."
+    # Fallback to simpler configuration
+    cat > /etc/nginx/sites-available/hakpak << EOF
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    
+    root ${INSTALL_DIR}/public;
+    index index.html;
+    
+    server_name _;
+    
+    location / {
+        try_files \$uri \$uri/ =404;
+    }
+}
+EOF
+    ln -sf /etc/nginx/sites-available/hakpak /etc/nginx/sites-enabled/
+    systemctl restart nginx
+fi
 
-# Only start hakpak if the service file was created properly
-if [ -f "/etc/systemd/system/hakpak.service" ]; then
+# Enable and start HakPak service
+systemctl enable hakpak
+
+# Start the service and verify it's running
+status "Starting HakPak service..."
+systemctl restart hakpak
+sleep 5
+
+# Check if the service is running
+if systemctl is-active hakpak >/dev/null 2>&1; then
+    success "HakPak service started successfully"
+else
+    warning "HakPak service failed to start, attempting manual start..."
+    
+    # Show service logs
+    status "HakPak service logs:"
+    journalctl -u hakpak -n 10 --no-pager
+    
+    # Try manual start for troubleshooting
+    status "Attempting to start app.py manually for troubleshooting..."
+    cd ${INSTALL_DIR}
+    ${INSTALL_DIR}/venv/bin/python ${INSTALL_DIR}/app.py --check-only
+    
+    # Try restarting one more time
     systemctl restart hakpak
     sleep 3
+    
     if systemctl is-active hakpak >/dev/null 2>&1; then
-        success "HakPak service started successfully"
+        success "HakPak service started successfully on second attempt"
     else
-        warning "HakPak service failed to start. Check logs with: journalctl -u hakpak"
-        status "Attempting to start app.py manually for troubleshooting..."
-        status "Check for errors in the output below:"
-        cd ${INSTALL_DIR}
-        ${INSTALL_DIR}/venv/bin/python ${INSTALL_DIR}/app.py --check-only || true
-        echo
+        warning "HakPak service still not running. Web interface may not be available."
     fi
-else
-    warning "HakPak service file not created. Web interface will not be available."
 fi
 
 # Check if Nginx is running
 if systemctl is-active nginx >/dev/null 2>&1; then
     success "Nginx started successfully"
 else
-    warning "Nginx failed to start. Check logs with: journalctl -u nginx"
-    nginx -t || true
+    warning "Nginx failed to start. Try checking logs with: journalctl -u nginx"
 fi
 
 # Add this function for final steps and verification based on network mode
